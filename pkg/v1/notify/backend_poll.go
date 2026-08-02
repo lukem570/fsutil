@@ -185,6 +185,25 @@ func (b *pollBackend) run() {
 // tree is slow, and a send blocks until the consumer is ready. Holding the
 // lock across either would stall Add and Remove for arbitrarily long.
 func (b *pollBackend) tick() bool {
+	// Events are gathered across every watch before any are sent, so that a
+	// path covered by two overlapping watches is reported once rather than
+	// once per watch. Backends that receive events from the kernel get this
+	// for free — the kernel reports a change to a file, not to each watch that
+	// happens to include it — and a caller should not be able to tell which
+	// backend it is using by counting events.
+	var (
+		events []Event
+		byPath = make(map[string]int)
+	)
+	record := func(ev Event) {
+		if i, seen := byPath[ev.Name]; seen {
+			events[i].Op |= ev.Op
+			return
+		}
+		byPath[ev.Name] = len(events)
+		events = append(events, ev)
+	}
+
 	for _, path := range b.WatchList() {
 		b.mu.Lock()
 		wch, ok := b.watches[path]
@@ -208,8 +227,8 @@ func (b *pollBackend) tick() bool {
 				b.mu.Lock()
 				delete(b.watches, path)
 				b.mu.Unlock()
-				if opts.ops.Has(Remove) && !b.sink.send(Event{Name: path, Op: Remove}) {
-					return false
+				if opts.ops.Has(Remove) {
+					record(Event{Name: path, Op: Remove})
 				}
 				continue
 			}
@@ -219,7 +238,9 @@ func (b *pollBackend) tick() bool {
 			continue
 		}
 
-		events := diffScans(prev, next, opts.ops)
+		for _, ev := range diffScans(prev, next, opts.ops) {
+			record(ev)
+		}
 
 		b.mu.Lock()
 		// Re-check: the watch may have been removed or replaced during the
@@ -228,11 +249,11 @@ func (b *pollBackend) tick() bool {
 			cur.snap = next
 		}
 		b.mu.Unlock()
+	}
 
-		for _, ev := range events {
-			if !b.sink.send(ev) {
-				return false
-			}
+	for _, ev := range events {
+		if !b.sink.send(ev) {
+			return false
 		}
 	}
 	return true

@@ -129,19 +129,37 @@ type backend interface {
 	Capabilities() Capability
 }
 
-// sink is how a backend delivers events and errors to the watcher's channels.
+// sink is where a backend delivers its events and errors.
 //
-// Every send races with [Watcher.Close]; the done channel is the tiebreaker.
-// Backends must use these methods rather than sending directly, and must treat
-// a false return as "the watcher is shutting down, stop and return".
-type sink struct {
+// It is an interface rather than a channel pair so that behaviour can be
+// layered between a backend and the caller — the recursive wrapper intercepts
+// events this way, and does so synchronously, without the extra goroutine and
+// channel handoff that piping through a second channel would cost on every
+// event.
+//
+// Every delivery races with [Watcher.Close]. A false return means the watcher
+// is shutting down and the backend should stop what it is doing and return.
+//
+// Backends must not hold their own locks while delivering. A sink may block
+// until a consumer is ready, and a layered sink may call back into the backend
+// — the recursive wrapper adds watches in response to events — so delivering
+// under a lock risks both stalls and deadlock.
+type sink interface {
+	send(ev Event) bool
+	fail(err error) bool
+	closing() bool
+}
+
+// chanSink delivers to the watcher's channels. It is the bottom of any stack
+// of sinks.
+type chanSink struct {
 	events chan<- Event
 	errors chan<- error
 	done   <-chan struct{}
 }
 
 // send delivers ev, reporting false if the watcher is closing.
-func (s sink) send(ev Event) bool {
+func (s chanSink) send(ev Event) bool {
 	if debugEnabled {
 		debugf("event %s", ev)
 	}
@@ -154,7 +172,7 @@ func (s sink) send(ev Event) bool {
 }
 
 // fail delivers err, reporting false if the watcher is closing.
-func (s sink) fail(err error) bool {
+func (s chanSink) fail(err error) bool {
 	if debugEnabled {
 		debugf("error %s", err)
 	}
@@ -167,8 +185,8 @@ func (s sink) fail(err error) bool {
 }
 
 // closing reports whether the watcher has begun shutting down. Backends use it
-// to break out of loops that are not currently blocked on a send.
-func (s sink) closing() bool {
+// to break out of loops that are not currently blocked on a delivery.
+func (s chanSink) closing() bool {
 	select {
 	case <-s.done:
 		return true
@@ -246,7 +264,7 @@ func newBackend(s sink, cfg config) (backend, error) {
 			if caps := probeCapabilities(f); caps.Has(CapPrivileged) {
 				continue
 			}
-			b, err := f.new(s, cfg)
+			b, err := construct(f, s, cfg)
 			if err != nil {
 				debugf("backend %s unavailable: %s", f.kind, err)
 				continue
@@ -261,7 +279,7 @@ func newBackend(s sink, cfg config) (backend, error) {
 		if f.kind != cfg.backend {
 			continue
 		}
-		b, err := f.new(s, cfg)
+		b, err := construct(f, s, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("notify: backend %s: %w", cfg.backend, err)
 		}
@@ -279,6 +297,23 @@ func newBackend(s sink, cfg config) (backend, error) {
 	}
 	return nil, fmt.Errorf("notify: %w: backend %s is not compiled into this binary",
 		ErrUnsupported, cfg.backend)
+}
+
+// construct builds a backend, adding recursion support if the implementation
+// does not have it natively.
+//
+// Recursion is layered rather than reimplemented per backend. Most kernel
+// interfaces watch a single directory, and the work of extending that to a
+// tree — placing watches on subdirectories, adopting directories as they
+// appear, pruning them as they go — is identical regardless of which interface
+// delivered the event. Doing it once means one implementation to get right
+// instead of one per platform, and it means a backend added later gets
+// recursion for free.
+func construct(f backendFactory, s sink, cfg config) (backend, error) {
+	if factoryCaps[f.kind].Has(CapRecursive) {
+		return f.new(s, cfg)
+	}
+	return newRecursiveBackend(f, s, cfg)
 }
 
 // probeCapabilities reports the capabilities a factory's backend would have,

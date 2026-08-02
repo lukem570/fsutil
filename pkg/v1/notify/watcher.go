@@ -96,7 +96,7 @@ func NewWatcherWith(opts ...Option) (*Watcher, error) {
 		done:   make(chan struct{}),
 	}
 
-	b, err := newBackend(sink{
+	b, err := newBackend(chanSink{
 		events: st.events,
 		errors: st.errors,
 		done:   st.done,
