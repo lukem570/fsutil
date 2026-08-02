@@ -119,17 +119,26 @@ interval of latency.
 
 ## Backends
 
-| Backend | Platform | Mechanism |
-|---|---|---|
-| `inotify` | Linux | `inotify_init1` |
-| `kqueue` | macOS, FreeBSD, OpenBSD, NetBSD, DragonFly | `EVFILT_VNODE` |
-| `poll` | everywhere | periodic rescan |
-| `fanotify` | Linux 5.9+ | *planned* |
-| `directory-changes` | Windows | *planned* |
-| `usn-journal` | Windows | *planned* |
-| `fen` | illumos, Solaris | *planned* |
+| Backend | Platform | Mechanism | Status |
+|---|---|---|---|
+| `poll` | everywhere | periodic rescan | verified |
+| `inotify` | Linux | `inotify_init1` | verified |
+| `fanotify` | Linux 5.9+ | `fanotify_mark`, needs `CAP_SYS_ADMIN` | verified |
+| `kqueue` | macOS, FreeBSD, OpenBSD, NetBSD, DragonFly | `EVFILT_VNODE` | awaiting CI |
+| `directory-changes` | Windows | `ReadDirectoryChangesW` | awaiting CI |
+| `usn-journal` | Windows | NTFS change journal | planned |
+| `fen` | illumos, Solaris | `port_create` | planned |
 
-Platforms without a native backend yet still work — they use polling, which is
+"Verified" means the backend passes the conformance suite on a real machine.
+"Awaiting CI" means it compiles and vets for every target it claims but has not
+yet executed — there was no host to run it on while it was written. Treat those
+two as different until CI says otherwise.
+
+`fanotify` is never selected automatically, because a backend that works only
+when a process happens to be privileged is not something to depend on silently.
+Ask for it by name.
+
+Platforms without a native backend still work — they use polling, which is
 slower but correct. See [docs/backends.md](docs/backends.md) for what each one
 can and cannot do.
 
@@ -165,7 +174,9 @@ rather than from any library, so they are worth stating plainly.
   reliable to entirely absent depending on server, client, mount options, and
   protocol version, and none of that is visible from the program.
 
-[docs/platform-notes.md](docs/platform-notes.md) has the details.
+[docs/platform-notes.md](docs/platform-notes.md) has the details, and
+[docs/deviations.md](docs/deviations.md) records where the platforms genuinely
+behave differently from one another.
 
 ## Command line
 
