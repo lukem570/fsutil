@@ -119,7 +119,7 @@ func newInotifyBackend(s sink, _ config) (backend, error) {
 		byName: make(map[string]int32),
 	}
 
-	if err := unix.Pipe2(b.wake[:], unix.O_CLOEXEC|unix.O_NONBLOCK); err != nil {
+	if err := newWakePipe(&b.wake); err != nil {
 		_ = unix.Close(fd)
 		return nil, fmt.Errorf("creating shutdown pipe: %w", err)
 	}

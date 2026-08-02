@@ -16,6 +16,10 @@ vars:
     aix/ppc64 plan9/amd64 js/wasm wasip1/wasm
     android/arm64
 
+# The library itself never uses cgo, and `crossbuild` proves it. Test tasks
+# override this: the race detector is implemented in C and refuses to build
+# without cgo, so leaving it off here would silently turn `test:race` into a
+# task that cannot run rather than one that passes.
 env:
   CGO_ENABLED: '0'
 
@@ -94,16 +98,22 @@ tasks:
 
   test:race:
     desc: Run the test suite under the race detector
+    env:
+      CGO_ENABLED: '1'
     cmds:
       - go test -race ./...
 
   test:stress:
     desc: Repeat the suite under -race to shake out flakes
+    env:
+      CGO_ENABLED: '1'
     cmds:
       - go test -race -count={{.COUNT | default 20}} ./...
 
   test:cover:
     desc: Run tests with coverage and enforce the minimum threshold
+    env:
+      CGO_ENABLED: '1'
     cmds:
       - go test -race -covermode=atomic -coverprofile={{.COVER_PROFILE}} ./...
       - go tool cover -html={{.COVER_PROFILE}} -o coverage.html
@@ -116,11 +126,15 @@ tasks:
 
   test:fdlimit:
     desc: Run the fd-budget suite under an artificially low RLIMIT_NOFILE (M6)
+    env:
+      CGO_ENABLED: '1'
     cmds:
       - FSUTIL_TEST_FD_LIMIT={{.LIMIT | default 256}} go test -race -run 'FD|Budget|Degrad' ./pkg/v1/notify/...
 
   conformance:
     desc: Run the API compatibility suite — the drop-in guarantee proof
+    env:
+      CGO_ENABLED: '1'
     cmds:
       - go test -race -tags conformance -run TestConformance ./pkg/v1/notify/...
 
@@ -180,4 +194,4 @@ tasks:
       - task: deps:verify
       - grep -q '{{.TAG}}' CHANGELOG.md || (echo '{{.TAG}} missing from CHANGELOG.md' >&2; exit 1)
       - git tag -a {{.TAG}} -m 'Release {{.TAG}}'
-      - echo 'Tagged {{.TAG}}. Push with: git push origin {{.TAG}}'
+      - "echo 'Tagged {{.TAG}}. Push with: git push origin {{.TAG}}'"

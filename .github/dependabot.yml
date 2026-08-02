@@ -1,0 +1,19 @@
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    # golang.org/x/sys is the only runtime dependency, and its newer releases
+    # require a newer Go than this module's floor. Accepting an automatic
+    # upgrade would raise the minimum Go version as a side effect of a
+    # dependency bump, which is a decision to make deliberately.
+    ignore:
+      - dependency-name: golang.org/x/sys
+        update-types: [version-update:semver-minor, version-update:semver-major]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

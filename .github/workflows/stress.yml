@@ -1,0 +1,49 @@
+name: Stress
+
+# Filesystem tests are timing-dependent by nature, so a defect here shows up as
+# a test that fails one run in fifty rather than one that fails. The ordinary
+# CI matrix runs each test once and will not find those; this runs nightly and
+# repeatedly, where a rare failure has room to appear.
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      count:
+        description: 'Iterations per test'
+        required: false
+        default: '50'
+
+permissions:
+  contents: read
+
+jobs:
+  stress:
+    name: stress ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          check-latest: true
+
+      - name: Raise kernel watch limits (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo sysctl -w fs.inotify.max_user_watches=524288
+          sudo sysctl -w fs.inotify.max_user_instances=512
+
+      - name: Raise descriptor limits (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          sudo sysctl -w kern.maxfiles=65536
+          sudo sysctl -w kern.maxfilesperproc=32768
+
+      - name: Repeat the suite under the race detector
+        run: go test -race -count=${{ github.event.inputs.count || '50' }} -timeout 60m ./...

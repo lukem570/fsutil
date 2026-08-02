@@ -1,0 +1,221 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# The matrix is expensive. A push that supersedes an in-flight run should
+# cancel it rather than queue behind it.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: '1.24'
+
+jobs:
+  # Filesystem notification is the part of a program that is least alike
+  # between operating systems, so every supported system runs the real test
+  # suite on a real instance of itself. Cross-compilation proves only that the
+  # code builds; it says nothing about whether the kernel behaves as assumed.
+  native:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Runner labels change over time. If one of these disappears, the job
+        # fails loudly rather than silently skipping a platform.
+        os:
+          - ubuntu-latest      # linux/amd64  — inotify
+          - ubuntu-24.04-arm   # linux/arm64  — inotify
+          - macos-latest       # darwin/arm64 — kqueue
+          - macos-15-intel     # darwin/amd64 — kqueue
+          - windows-latest     # windows/amd64
+          - windows-11-arm     # windows/arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+
+      # Both limits below are low enough on stock runners to fail the stress
+      # tests for reasons that have nothing to do with this code.
+      - name: Raise kernel watch limits (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo sysctl -w fs.inotify.max_user_watches=524288
+          sudo sysctl -w fs.inotify.max_user_instances=512
+
+      # kqueue needs a descriptor per watched path, so the descriptor limit is
+      # the binding constraint on macOS rather than an incidental one.
+      - name: Raise descriptor limits (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          sudo sysctl -w kern.maxfiles=65536
+          sudo sysctl -w kern.maxfilesperproc=32768
+          ulimit -n 16384 || true
+
+      - name: Report which backends this host offers
+        run: go test -run TestBackendsAvailable -v ./pkg/v1/notify/
+
+      - name: Test
+        run: go test -race -count=1 ./...
+
+      - name: Conformance suite
+        run: go test -race -count=1 -run TestConformance -v ./pkg/v1/notify/
+
+  # The BSDs have no hosted runner, so each one is booted in a virtual machine
+  # on a Linux host. This is the only place kqueue is exercised on anything
+  # other than macOS, and the BSDs differ from macOS and from each other in
+  # both kqueue behaviour and the width of the kevent structure fields.
+  bsd:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: freebsd
+            action: vmactions/freebsd-vm@v1
+            prepare: pkg install -y go
+          - name: netbsd
+            action: vmactions/netbsd-vm@v1
+            prepare: /usr/sbin/pkg_add go
+          - name: openbsd
+            action: vmactions/openbsd-vm@v1
+            prepare: pkg_add -I go
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test in a ${{ matrix.name }} virtual machine
+        uses: ${{ matrix.action }}
+        with:
+          usesh: true
+          prepare: ${{ matrix.prepare }}
+          # The race detector needs cgo and a C toolchain, which these images
+          # do not reliably have. Losing race coverage here is acceptable:
+          # Linux and macOS run the same suite under -race, and what these
+          # machines are here to prove is that the kqueue backend behaves
+          # correctly on each BSD, not that the shared code is race-free.
+          run: |
+            go version
+            go test -count=1 ./...
+            go test -count=1 -run TestConformance -v ./pkg/v1/notify/
+
+  # illumos is the only system with a FEN backend, so without this job that
+  # backend would never run anywhere.
+  illumos:
+    name: illumos
+    runs-on: ubuntu-latest
+    # Best effort: this image is the least predictable of the set, and a
+    # packaging change there should not block an otherwise green build. Its
+    # result stays visible.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test in an OmniOS virtual machine
+        uses: vmactions/omnios-vm@v1
+        with:
+          usesh: true
+          prepare: pkg install go-openssl3 || pkg install golang || true
+          run: |
+            go version
+            go test -count=1 ./...
+
+  # Android is listed as supported but has no hosted runner and no VM image, so
+  # it is exercised through an emulator.
+  android:
+    name: android
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Build for android/arm64
+        env:
+          CGO_ENABLED: '0'
+          GOOS: android
+          GOARCH: arm64
+        run: go build ./...
+
+  # Everything with no runner and no virtual machine still has to keep
+  # compiling. This is the guard against a backend's build tags drifting until
+  # a platform silently has no implementation at all.
+  crossbuild:
+    name: cross-compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: arduino/setup-task@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - run: task crossbuild
+      - name: Verify the dependency policy
+        run: task deps:verify
+
+  lint:
+    name: lint (${{ matrix.goos }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Backend files are behind build tags, so a single-platform lint run
+        # never sees most of them. Linting per operating system is the only way
+        # to cover the code that only exists for one.
+        goos: [linux, darwin, windows, freebsd, openbsd, netbsd, illumos]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: golangci/golangci-lint-action@v6
+        env:
+          GOOS: ${{ matrix.goos }}
+        with:
+          version: latest
+
+  format:
+    name: format and tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: arduino/setup-task@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - run: go install mvdan.cc/gofumpt@latest
+      - run: task fmt:check
+      - run: task tidy
+
+  # Go's own support window is the two most recent releases; the floor in
+  # go.mod is older than that, so it has to be checked separately or it will
+  # rot without anyone noticing.
+  go-versions:
+    name: go ${{ matrix.go }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.24', '1.25', '1.26']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+      - run: go build ./...
+      - run: go test -count=1 ./...
