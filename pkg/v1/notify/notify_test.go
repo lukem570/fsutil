@@ -12,19 +12,21 @@ import (
 
 // testPollInterval keeps the polling backend responsive enough that tests
 // finish quickly, without making them so tight that a loaded CI machine
-// produces spurious failures.
+// produces spurious failures. Backends that hear from the kernel ignore it.
 const testPollInterval = 15 * time.Millisecond
 
 // testTimeout bounds how long a test waits for an expected event. It is
-// generous relative to the poll interval: the failure we care about is "the
-// event never arrives", not "the event was slow".
+// generous relative to the poll interval: the failure worth reporting is "the
+// event never arrived", not "the event was slow".
 const testTimeout = 5 * time.Second
+
+func timeAfterTestTimeout() <-chan time.Time { return time.After(testTimeout) }
 
 // collector drains a watcher's channels into slices.
 //
-// Draining is not optional. Both channels are unbuffered by default, so a test
-// that does not read them blocks the backend and then deadlocks its own
-// Close.
+// Draining is not optional. The Errors channel is unbuffered, so a test that
+// does not read it blocks the backend on its first error and then deadlocks
+// its own Close.
 type collector struct {
 	mu     sync.Mutex
 	events []Event
@@ -63,7 +65,6 @@ func collect(t *testing.T, w *Watcher) *collector {
 	return c
 }
 
-// snapshot returns the events seen so far.
 func (c *collector) snapshot() []Event {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -76,8 +77,8 @@ func (c *collector) errorsSeen() []error {
 	return append([]error(nil), c.errs...)
 }
 
-// await blocks until pred is satisfied by the events seen so far, and fails
-// the test if that has not happened before the timeout.
+// await blocks until pred is satisfied by the events seen so far, failing the
+// test if that has not happened before the timeout.
 func (c *collector) await(t *testing.T, what string, pred func([]Event) bool) []Event {
 	t.Helper()
 
@@ -95,9 +96,11 @@ func (c *collector) await(t *testing.T, what string, pred func([]Event) bool) []
 	}
 }
 
-// refute fails if pred becomes true within a short grace period. It is for
-// asserting that an event is *not* delivered, which cannot be proven, only
-// given a fair chance to fail.
+// refute fails if pred becomes true within a grace period.
+//
+// The absence of an event cannot be proven, only given a fair chance to
+// appear. The window is scaled to the poll interval so that the slowest
+// backend still gets several opportunities to be wrong.
 func (c *collector) refute(t *testing.T, what string, pred func([]Event) bool) {
 	t.Helper()
 
@@ -122,7 +125,6 @@ func formatEvents(events []Event) string {
 	return b.String()
 }
 
-// hasEvent reports whether any event names path and includes op.
 func hasEvent(events []Event, path string, op Op) bool {
 	for _, ev := range events {
 		if ev.Name == path && ev.Has(op) {
@@ -132,20 +134,20 @@ func hasEvent(events []Event, path string, op Op) bool {
 	return false
 }
 
-// newTestWatcher creates a polling watcher wired for fast, deterministic tests
-// and closes it when the test ends.
-func newTestWatcher(t *testing.T, opts ...Option) (*Watcher, *collector) {
+// newTestWatcherOn creates a watcher using a specific backend, wired for fast
+// tests, and closes it when the test ends.
+func newTestWatcherOn(t *testing.T, kind Backend, opts ...Option) (*Watcher, *collector) {
 	t.Helper()
 
 	opts = append([]Option{
-		WithBackend(BackendPoll),
+		WithBackend(kind),
 		WithPollInterval(testPollInterval),
 		WithEventBuffer(256),
 	}, opts...)
 
 	w, err := NewWatcherWith(opts...)
 	if err != nil {
-		t.Fatalf("NewWatcherWith: %s", err)
+		t.Fatalf("NewWatcherWith(%s): %s", kind, err)
 	}
 	c := collect(t, w)
 	t.Cleanup(func() {
@@ -154,11 +156,18 @@ func newTestWatcher(t *testing.T, opts ...Option) (*Watcher, *collector) {
 		}
 		select {
 		case <-c.closed:
-		case <-time.After(testTimeout):
+		case <-timeAfterTestTimeout():
 			t.Error("Close returned but the event channels were never closed")
 		}
 	})
 	return w, c
+}
+
+// newTestWatcher creates a polling watcher, for tests whose subject is the
+// package rather than any particular backend.
+func newTestWatcher(t *testing.T, opts ...Option) (*Watcher, *collector) {
+	t.Helper()
+	return newTestWatcherOn(t, BackendPoll, opts...)
 }
 
 func writeFile(t *testing.T, path, content string) {
@@ -224,7 +233,7 @@ func TestSplitRecursive(t *testing.T) {
 		{"...", ".", true},
 		{"relative/...", "relative", true},
 		{"/tmp/x/", filepath.Clean("/tmp/x"), false},
-		// "..." only means recursion as a trailing component.
+		// "..." means recursion only as a trailing component.
 		{"/tmp/.../x", filepath.Clean("/tmp/.../x"), false},
 	}
 	for _, tt := range tests {
@@ -241,7 +250,7 @@ func TestCapabilityHas(t *testing.T) {
 	if !c.Has(CapRecursive) {
 		t.Error("Has(CapRecursive) = false, want true")
 	}
-	// Has requires *all* the requested bits, not any of them.
+	// Has requires all the requested bits, not any of them.
 	if c.Has(CapRecursive | CapPrivileged) {
 		t.Error("Has(CapRecursive|CapPrivileged) = true, want false")
 	}
@@ -261,14 +270,47 @@ func TestBackendsAvailable(t *testing.T) {
 	if !hasPoll {
 		t.Errorf("Backends() = %v, want it to include %s", got, BackendPoll)
 	}
+	t.Logf("backends available on this host: %v", got)
 }
 
 func TestUnsupportedBackendIsRejected(t *testing.T) {
-	// A backend that exists as a constant but is not compiled in here must be
-	// refused outright rather than quietly substituted.
+	// A backend that is not compiled in here must be refused outright rather
+	// than quietly substituted with something else.
 	_, err := NewWatcherWith(WithBackend(Backend(200)))
 	if !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("NewWatcherWith(unknown backend) error = %v, want ErrUnsupported", err)
+		t.Fatalf("NewWatcherWith(unknown backend) = %v, want ErrUnsupported", err)
+	}
+}
+
+func TestAutoSelectionPrefersNative(t *testing.T) {
+	w, err := NewWatcherWith()
+	if err != nil {
+		t.Fatalf("NewWatcherWith: %s", err)
+	}
+	defer w.Close()
+
+	if w.Backend() == BackendAuto {
+		t.Fatal("Backend() = auto; a concrete backend must have been chosen")
+	}
+	// Polling is the last resort, so on a host with a native backend it must
+	// not be what automatic selection settles on.
+	if available := Backends(); len(available) > 1 && w.Backend() == BackendPoll {
+		t.Errorf("Backend() = %s despite %v being available", w.Backend(), available)
+	}
+	t.Logf("automatic selection chose %s", w.Backend())
+}
+
+func TestPrivilegedBackendsAreNotChosenAutomatically(t *testing.T) {
+	w, err := NewWatcherWith()
+	if err != nil {
+		t.Fatalf("NewWatcherWith: %s", err)
+	}
+	defer w.Close()
+
+	// A backend that needs elevation may be usable only because this process
+	// happens to be privileged, which is not a property to depend on silently.
+	if w.Capabilities().Has(CapPrivileged) {
+		t.Errorf("automatic selection chose the privileged backend %s", w.Backend())
 	}
 }
 
@@ -281,287 +323,11 @@ func TestInvalidConfigIsRejected(t *testing.T) {
 	}
 }
 
-// ------------------------------------------------------------ watcher tests
-
-func TestWatchDirectoryReportsCreateWriteRemove(t *testing.T) {
-	dir := t.TempDir()
-	w, c := newTestWatcher(t)
-	if err := w.Add(dir); err != nil {
-		t.Fatalf("Add: %s", err)
-	}
-
-	file := filepath.Join(dir, "a.txt")
-
-	writeFile(t, file, "hello")
-	c.await(t, "create of a.txt", func(evs []Event) bool {
-		return hasEvent(evs, file, Create)
-	})
-
-	writeFile(t, file, "hello world")
-	c.await(t, "write to a.txt", func(evs []Event) bool {
-		return hasEvent(evs, file, Write)
-	})
-
-	if err := os.Remove(file); err != nil {
-		t.Fatalf("Remove: %s", err)
-	}
-	c.await(t, "removal of a.txt", func(evs []Event) bool {
-		return hasEvent(evs, file, Remove)
-	})
-
-	if errs := c.errorsSeen(); len(errs) != 0 {
-		t.Errorf("unexpected errors: %v", errs)
-	}
-}
-
-func TestWatchDirectoryIsNotRecursiveByDefault(t *testing.T) {
-	dir := t.TempDir()
-	sub := filepath.Join(dir, "sub")
-	if err := os.Mkdir(sub, 0o755); err != nil {
-		t.Fatalf("Mkdir: %s", err)
-	}
-
-	w, c := newTestWatcher(t)
-	if err := w.Add(dir); err != nil {
-		t.Fatalf("Add: %s", err)
-	}
-
-	nested := filepath.Join(sub, "deep.txt")
-	writeFile(t, nested, "content")
-
-	c.refute(t, "event for a file in an unwatched subdirectory", func(evs []Event) bool {
-		return hasEvent(evs, nested, Create)
-	})
-}
-
-func TestWatchRecursiveViaSuffix(t *testing.T) {
-	dir := t.TempDir()
-	sub := filepath.Join(dir, "sub")
-	if err := os.Mkdir(sub, 0o755); err != nil {
-		t.Fatalf("Mkdir: %s", err)
-	}
-
-	w, c := newTestWatcher(t)
-	if err := w.Add(dir + string(filepath.Separator) + "..."); err != nil {
-		t.Fatalf("Add: %s", err)
-	}
-
-	nested := filepath.Join(sub, "deep.txt")
-	writeFile(t, nested, "content")
-	c.await(t, "create in a subdirectory", func(evs []Event) bool {
-		return hasEvent(evs, nested, Create)
-	})
-
-	// A directory created after the watch was established must also be
-	// covered, which is the part naive recursive implementations miss.
-	later := filepath.Join(dir, "later")
-	if err := os.MkdirAll(filepath.Join(later, "deeper"), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %s", err)
-	}
-	deepest := filepath.Join(later, "deeper", "x.txt")
-	writeFile(t, deepest, "content")
-	c.await(t, "create in a subdirectory made after the watch", func(evs []Event) bool {
-		return hasEvent(evs, deepest, Create)
-	})
-}
-
-func TestWatchRecursiveViaOption(t *testing.T) {
-	dir := t.TempDir()
-	w, c := newTestWatcher(t)
-	if err := w.AddWith(dir, WithRecursive()); err != nil {
-		t.Fatalf("AddWith: %s", err)
-	}
-
-	nested := filepath.Join(dir, "a", "b")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %s", err)
-	}
-	file := filepath.Join(nested, "c.txt")
-	writeFile(t, file, "content")
-
-	c.await(t, "create deep in the tree", func(evs []Event) bool {
-		return hasEvent(evs, file, Create)
-	})
-}
-
-func TestWatchSingleFile(t *testing.T) {
-	dir := t.TempDir()
-	file := filepath.Join(dir, "watched.txt")
-	writeFile(t, file, "initial")
-
-	w, c := newTestWatcher(t)
-	if err := w.Add(file); err != nil {
-		t.Fatalf("Add: %s", err)
-	}
-
-	writeFile(t, file, "changed and longer")
-	c.await(t, "write to the watched file", func(evs []Event) bool {
-		return hasEvent(evs, file, Write)
-	})
-}
-
-func TestExistingFilesAreNotReportedAsCreated(t *testing.T) {
-	dir := t.TempDir()
-	existing := filepath.Join(dir, "already-here.txt")
-	writeFile(t, existing, "content")
-
-	w, c := newTestWatcher(t)
-	if err := w.Add(dir); err != nil {
-		t.Fatalf("Add: %s", err)
-	}
-
-	c.refute(t, "create event for a pre-existing file", func(evs []Event) bool {
-		return hasEvent(evs, existing, Create)
-	})
-}
-
-func TestRenameIsPaired(t *testing.T) {
-	if !fileIDSupported {
-		t.Skip("rename pairing needs stable file identity, which this platform lacks")
-	}
-
-	dir := t.TempDir()
-	src := filepath.Join(dir, "before.txt")
-	dst := filepath.Join(dir, "after.txt")
-	writeFile(t, src, "content")
-
-	w, c := newTestWatcher(t)
-	if err := w.Add(dir); err != nil {
-		t.Fatalf("Add: %s", err)
-	}
-
-	if err := os.Rename(src, dst); err != nil {
-		t.Fatalf("Rename: %s", err)
-	}
-
-	c.await(t, "rename of the old name", func(evs []Event) bool {
-		return hasEvent(evs, src, Rename) && hasEvent(evs, dst, Create)
-	})
-
-	// The old name was moved, not deleted; reporting Remove as well would be
-	// wrong and would make callers delete state they should have moved.
-	if evs := c.snapshot(); hasEvent(evs, src, Remove) {
-		t.Errorf("a rename reported REMOVE for the old name:\n%s", formatEvents(evs))
-	}
-}
-
-func TestWithOpsFiltersEvents(t *testing.T) {
-	dir := t.TempDir()
-	w, c := newTestWatcher(t)
-	if err := w.AddWith(dir, WithOps(Create)); err != nil {
-		t.Fatalf("AddWith: %s", err)
-	}
-
-	file := filepath.Join(dir, "a.txt")
-	writeFile(t, file, "hello")
-	c.await(t, "create", func(evs []Event) bool { return hasEvent(evs, file, Create) })
-
-	writeFile(t, file, "hello world, at greater length")
-	c.refute(t, "write event on a watch restricted to creates", func(evs []Event) bool {
-		return hasEvent(evs, file, Write)
-	})
-}
-
 func TestWithOpsRejectsEmptySet(t *testing.T) {
 	w, _ := newTestWatcher(t)
-	err := w.AddWith(t.TempDir(), WithOps())
-	if !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("AddWith(WithOps()) error = %v, want ErrUnsupported", err)
+	if err := w.AddWith(t.TempDir(), WithOps()); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("AddWith(WithOps()) = %v, want ErrUnsupported", err)
 	}
-}
-
-func TestUnportableOpsRejectedWhenUnsupported(t *testing.T) {
-	// Polling cannot observe opens or reads: they leave no trace in the
-	// metadata it compares. Asking for them must fail loudly rather than
-	// silently never firing.
-	w, _ := newTestWatcher(t)
-	err := w.AddWith(t.TempDir(), WithOps(UnportableCloseWrite))
-	if !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("AddWith(WithOps(UnportableCloseWrite)) error = %v, want ErrUnsupported", err)
-	}
-}
-
-func TestWatchList(t *testing.T) {
-	dirA, dirB := t.TempDir(), t.TempDir()
-	w, _ := newTestWatcher(t)
-
-	if got := w.WatchList(); len(got) != 0 {
-		t.Errorf("WatchList() on a fresh watcher = %v, want empty", got)
-	}
-	for _, d := range []string{dirA, dirB} {
-		if err := w.Add(d); err != nil {
-			t.Fatalf("Add(%s): %s", d, err)
-		}
-	}
-	if got := w.WatchList(); len(got) != 2 {
-		t.Errorf("WatchList() = %v, want 2 entries", got)
-	}
-
-	if err := w.Remove(dirA); err != nil {
-		t.Fatalf("Remove: %s", err)
-	}
-	got := w.WatchList()
-	if len(got) != 1 || got[0] != dirB {
-		t.Errorf("WatchList() after Remove = %v, want [%s]", got, dirB)
-	}
-}
-
-func TestRemoveNonExistentWatch(t *testing.T) {
-	w, _ := newTestWatcher(t)
-	err := w.Remove(t.TempDir())
-	if !errors.Is(err, ErrNonExistentWatch) {
-		t.Fatalf("Remove(unwatched) error = %v, want ErrNonExistentWatch", err)
-	}
-}
-
-func TestRemovedWatchStopsReporting(t *testing.T) {
-	dir := t.TempDir()
-	w, c := newTestWatcher(t)
-	if err := w.Add(dir); err != nil {
-		t.Fatalf("Add: %s", err)
-	}
-	if err := w.Remove(dir); err != nil {
-		t.Fatalf("Remove: %s", err)
-	}
-
-	file := filepath.Join(dir, "after-removal.txt")
-	writeFile(t, file, "content")
-	c.refute(t, "event from a removed watch", func(evs []Event) bool {
-		return hasEvent(evs, file, Create)
-	})
-}
-
-func TestAddNonExistentPath(t *testing.T) {
-	w, _ := newTestWatcher(t)
-	err := w.Add(filepath.Join(t.TempDir(), "does-not-exist"))
-	if !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("Add(missing path) error = %v, want it to wrap os.ErrNotExist", err)
-	}
-}
-
-func TestWatchedPathRemovalIsReported(t *testing.T) {
-	parent := t.TempDir()
-	dir := filepath.Join(parent, "watched")
-	if err := os.Mkdir(dir, 0o755); err != nil {
-		t.Fatalf("Mkdir: %s", err)
-	}
-
-	w, c := newTestWatcher(t)
-	if err := w.Add(dir); err != nil {
-		t.Fatalf("Add: %s", err)
-	}
-	if err := os.RemoveAll(dir); err != nil {
-		t.Fatalf("RemoveAll: %s", err)
-	}
-
-	c.await(t, "removal of the watched directory itself", func(evs []Event) bool {
-		return hasEvent(evs, dir, Remove)
-	})
-
-	// The watch is gone with the directory, so it must not linger in the list.
-	c.await(t, "the watch to be dropped", func([]Event) bool {
-		return len(w.WatchList()) == 0
-	})
 }
 
 func TestCloseIsIdempotent(t *testing.T) {
@@ -600,47 +366,10 @@ func TestOperationsAfterCloseReturnErrClosed(t *testing.T) {
 	}
 }
 
-// TestCloseWithNoConsumer is the deadlock regression test.
-//
-// Close must not depend on anyone reading the Events channel. If it does, any
-// program that stops consuming before shutting down hangs forever, and that is
-// the most natural way to write the shutdown path.
-func TestCloseWithNoConsumer(t *testing.T) {
-	dir := t.TempDir()
-	w, err := NewWatcherWith(WithBackend(BackendPoll), WithPollInterval(testPollInterval))
-	if err != nil {
-		t.Fatalf("NewWatcherWith: %s", err)
-	}
-	if err := w.Add(dir); err != nil {
-		t.Fatalf("Add: %s", err)
-	}
-
-	// Generate changes with nobody reading, so the backend is parked mid-send.
-	for i := range 20 {
-		writeFile(t, filepath.Join(dir, string(rune('a'+i))+".txt"), "content")
-	}
-	time.Sleep(4 * testPollInterval)
-
-	done := make(chan error, 1)
-	go func() { done <- w.Close() }()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("Close: %s", err)
-		}
-	case <-time.After(testTimeout):
-		t.Fatal("Close blocked with no consumer draining Events")
-	}
-}
-
 func TestBackendReportsItself(t *testing.T) {
 	w, _ := newTestWatcher(t)
 	if got := w.Backend(); got != BackendPoll {
 		t.Errorf("Backend() = %s, want %s", got, BackendPoll)
-	}
-	if got := w.Backend(); got == BackendAuto {
-		t.Error("Backend() returned BackendAuto; it must name a concrete backend")
 	}
 	if !w.Capabilities().Has(CapRecursive) {
 		t.Error("the polling backend should report CapRecursive")
@@ -648,29 +377,33 @@ func TestBackendReportsItself(t *testing.T) {
 }
 
 func TestConcurrentAddRemove(t *testing.T) {
-	w, _ := newTestWatcher(t)
+	for _, kind := range Backends() {
+		t.Run(kind.String(), func(t *testing.T) {
+			w, _ := newTestWatcherOn(t, kind)
 
-	dirs := make([]string, 8)
-	for i := range dirs {
-		dirs[i] = t.TempDir()
-	}
-
-	var wg sync.WaitGroup
-	for _, dir := range dirs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for range 20 {
-				if err := w.Add(dir); err != nil {
-					t.Errorf("Add(%s): %s", dir, err)
-					return
-				}
-				if err := w.Remove(dir); err != nil && !errors.Is(err, ErrNonExistentWatch) {
-					t.Errorf("Remove(%s): %s", dir, err)
-					return
-				}
+			dirs := make([]string, 8)
+			for i := range dirs {
+				dirs[i] = t.TempDir()
 			}
-		}()
+
+			var wg sync.WaitGroup
+			for _, dir := range dirs {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for range 20 {
+						if err := w.Add(dir); err != nil {
+							t.Errorf("Add(%s): %s", dir, err)
+							return
+						}
+						if err := w.Remove(dir); err != nil && !errors.Is(err, ErrNonExistentWatch) {
+							t.Errorf("Remove(%s): %s", dir, err)
+							return
+						}
+					}
+				}()
+			}
+			wg.Wait()
+		})
 	}
-	wg.Wait()
 }

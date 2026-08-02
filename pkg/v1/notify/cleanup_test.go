@@ -18,11 +18,11 @@ import (
 // under test.
 //
 //go:noinline
-func newAbandonedWatcher(t *testing.T, dir string) (chan Event, chan error) {
+func newAbandonedWatcher(t *testing.T, kind Backend, dir string) (chan Event, chan error) {
 	t.Helper()
 
 	w, err := NewWatcherWith(
-		WithBackend(BackendPoll),
+		WithBackend(kind),
 		WithPollInterval(testPollInterval),
 		WithEventBuffer(64),
 	)
@@ -65,39 +65,42 @@ func awaitCollection(t *testing.T, what string, ch <-chan struct{}) {
 // life of the process. The observable consequence of cleanup is that the event
 // channels are closed, which is what a consumer ranging over them sees.
 func TestAbandonedWatcherIsCleanedUp(t *testing.T) {
-	dir := t.TempDir()
-	events, errs := newAbandonedWatcher(t, dir)
+	eachBackend(t, func(t *testing.T, kind Backend) {
+		dir := t.TempDir()
+		events, errs := newAbandonedWatcher(t, kind, dir)
 
-	eventsClosed := make(chan struct{})
-	go func() {
-		for range events { //revive:disable-line:empty-block
-		}
-		close(eventsClosed)
-	}()
-
-	errsClosed := make(chan struct{})
-	go func() {
-		for range errs { //revive:disable-line:empty-block
-		}
-		close(errsClosed)
-	}()
-
-	// Keep the filesystem changing, so a watcher that survived collection has
-	// something to report and the test fails loudly rather than by timeout.
-	go func() {
-		for i := range 100 {
-			select {
-			case <-eventsClosed:
-				return
-			default:
+		eventsClosed := make(chan struct{})
+		go func() {
+			for range events { //revive:disable-line:empty-block
 			}
-			writeFileNoFatal(filepath.Join(dir, "churn.txt"), i)
-			time.Sleep(testPollInterval)
-		}
-	}()
+			close(eventsClosed)
+		}()
 
-	awaitCollection(t, "the abandoned watcher's Events channel to close", eventsClosed)
-	awaitCollection(t, "the abandoned watcher's Errors channel to close", errsClosed)
+		errsClosed := make(chan struct{})
+		go func() {
+			for range errs { //revive:disable-line:empty-block
+			}
+			close(errsClosed)
+		}()
+
+		// Keep the filesystem changing, so a watcher that survived collection
+		// has something to report and the test fails loudly rather than by
+		// timeout.
+		go func() {
+			for i := range 100 {
+				select {
+				case <-eventsClosed:
+					return
+				default:
+				}
+				writeFileNoFatal(filepath.Join(dir, "churn.txt"), i)
+				time.Sleep(testPollInterval)
+			}
+		}()
+
+		awaitCollection(t, "the abandoned watcher's Events channel to close", eventsClosed)
+		awaitCollection(t, "the abandoned watcher's Errors channel to close", errsClosed)
+	})
 }
 
 // TestAbandonedWatcherStopsItsGoroutines checks that cleanup releases the
@@ -105,37 +108,39 @@ func TestAbandonedWatcherIsCleanedUp(t *testing.T) {
 // leaving a scan loop running would still leak a thread of execution and,
 // with it, every descriptor the backend holds.
 func TestAbandonedWatcherStopsItsGoroutines(t *testing.T) {
-	dir := t.TempDir()
+	eachBackend(t, func(t *testing.T, kind Backend) {
+		dir := t.TempDir()
 
-	before := runtime.NumGoroutine()
+		before := runtime.NumGoroutine()
 
-	events, errs := newAbandonedWatcher(t, dir)
-	closed := make(chan struct{})
-	go func() {
-		for range events { //revive:disable-line:empty-block
-		}
-		close(closed)
-	}()
-	go func() {
-		for range errs { //revive:disable-line:empty-block
-		}
-	}()
+		events, errs := newAbandonedWatcher(t, kind, dir)
+		closed := make(chan struct{})
+		go func() {
+			for range events { //revive:disable-line:empty-block
+			}
+			close(closed)
+		}()
+		go func() {
+			for range errs { //revive:disable-line:empty-block
+			}
+		}()
 
-	awaitCollection(t, "the abandoned watcher to shut down", closed)
+		awaitCollection(t, "the abandoned watcher to shut down", closed)
 
-	// The two draining goroutines above exit once the channels close, but not
-	// necessarily before this check, so allow for them settling.
-	deadline := time.Now().Add(testTimeout)
-	for {
-		if runtime.NumGoroutine() <= before+1 {
-			return
+		// The two draining goroutines above exit once the channels close, but
+		// not necessarily before this check, so allow for them settling.
+		deadline := time.Now().Add(testTimeout)
+		for {
+			if runtime.NumGoroutine() <= before+1 {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("goroutines not released: %d before, %d after",
+					before, runtime.NumGoroutine())
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("goroutines not released: %d before, %d after",
-				before, runtime.NumGoroutine())
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	})
 }
 
 // TestCloseThenCollectDoesNotPanic guards the interaction between the two
