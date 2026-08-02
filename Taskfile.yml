@@ -1,0 +1,183 @@
+version: '3'
+
+vars:
+  PKG: github.com/lukem570/fsutil
+  COVER_PROFILE: coverage.txt
+  COVER_MIN: 75
+  # Every GOOS/GOARCH the library claims to support. `crossbuild` proves each one
+  # still compiles with cgo disabled.
+  CROSS_TARGETS: >-
+    linux/amd64 linux/386 linux/arm linux/arm64 linux/riscv64 linux/s390x
+    linux/ppc64le linux/mips64
+    darwin/amd64 darwin/arm64
+    windows/amd64 windows/386 windows/arm64
+    freebsd/amd64 freebsd/arm64 openbsd/amd64 netbsd/amd64 dragonfly/amd64
+    illumos/amd64 solaris/amd64
+    aix/ppc64 plan9/amd64 js/wasm wasip1/wasm
+    android/arm64
+
+env:
+  CGO_ENABLED: '0'
+
+tasks:
+  default:
+    desc: Run the full pre-commit gate
+    cmds: [{task: check}]
+
+  check:
+    desc: fmt + vet + lint + race tests + crossbuild (the pre-commit gate)
+    cmds:
+      - task: fmt:check
+      - task: vet
+      - task: lint
+      - task: test:race
+      - task: crossbuild
+
+  ci:
+    desc: What the CI workflow runs
+    cmds:
+      - task: check
+      - task: test:cover
+
+  build:
+    desc: Build all packages and the debug CLI
+    cmds:
+      - go build ./...
+      - go build -o bin/fsutil ./cmd/fsutil
+
+  clean:
+    desc: Remove build and coverage artefacts
+    cmds:
+      - rm -rf bin dist {{.COVER_PROFILE}} coverage.html
+      - go clean -testcache
+
+  tidy:
+    desc: Tidy go.mod and fail if it produced a diff
+    cmds:
+      - go mod tidy
+      - git diff --exit-code go.mod go.sum
+
+  # ---------------------------------------------------------------- formatting
+
+  fmt:
+    desc: Format all Go source
+    cmds:
+      - gofumpt -l -w .
+
+  fmt:check:
+    desc: Fail if any file is not gofumpt-formatted
+    cmds:
+      - |
+        out=$(gofumpt -l .)
+        if [ -n "$out" ]; then
+          echo "not gofumpt-formatted:" >&2
+          echo "$out" >&2
+          exit 1
+        fi
+
+  vet:
+    desc: go vet
+    cmds:
+      - go vet ./...
+
+  lint:
+    desc: golangci-lint (includes the depguard rule enforcing stdlib + x/sys only)
+    cmds:
+      - golangci-lint run ./...
+
+  # ------------------------------------------------------------------- testing
+
+  test:
+    desc: Run the test suite
+    cmds:
+      - go test ./...
+
+  test:race:
+    desc: Run the test suite under the race detector
+    cmds:
+      - go test -race ./...
+
+  test:stress:
+    desc: Repeat the suite under -race to shake out flakes
+    cmds:
+      - go test -race -count={{.COUNT | default 20}} ./...
+
+  test:cover:
+    desc: Run tests with coverage and enforce the minimum threshold
+    cmds:
+      - go test -race -covermode=atomic -coverprofile={{.COVER_PROFILE}} ./...
+      - go tool cover -html={{.COVER_PROFILE}} -o coverage.html
+      - |
+        pct=$(go tool cover -func={{.COVER_PROFILE}} | awk '/^total:/ {gsub(/%/,"",$3); print $3}')
+        echo "total coverage: ${pct}% (minimum {{.COVER_MIN}}%)"
+        awk -v p="$pct" -v m={{.COVER_MIN}} 'BEGIN { exit !(p+0 < m+0) }' && {
+          echo "coverage below threshold" >&2; exit 1
+        } || true
+
+  test:fdlimit:
+    desc: Run the fd-budget suite under an artificially low RLIMIT_NOFILE (M6)
+    cmds:
+      - FSUTIL_TEST_FD_LIMIT={{.LIMIT | default 256}} go test -race -run 'FD|Budget|Degrad' ./pkg/v1/notify/...
+
+  conformance:
+    desc: Run the API compatibility suite — the drop-in guarantee proof
+    cmds:
+      - go test -race -tags conformance -run TestConformance ./pkg/v1/notify/...
+
+  bench:
+    desc: Run benchmarks
+    cmds:
+      - go test -run '^$' -bench . -benchmem ./...
+
+  # ---------------------------------------------------------------- portability
+
+  crossbuild:
+    desc: Verify every supported GOOS/GOARCH still compiles with CGO_ENABLED=0
+    cmds:
+      - |
+        fail=0
+        for target in {{.CROSS_TARGETS}}; do
+          goos=${target%/*}; goarch=${target#*/}
+          if GOOS=$goos GOARCH=$goarch go build ./... 2>/tmp/fsutil-cb.err; then
+            printf '  ok    %s\n' "$target"
+          else
+            printf '  FAIL  %s\n' "$target"; sed 's/^/        /' /tmp/fsutil-cb.err
+            fail=1
+          fi
+        done
+        exit $fail
+
+  deps:verify:
+    desc: Fail if anything under pkg/ imports outside stdlib + golang.org/x/sys
+    cmds:
+      - |
+        bad=$(go list -deps ./pkg/... \
+          | grep -E '^[a-z0-9.-]+\.[a-z]{2,}/' \
+          | grep -v '^golang.org/x/sys' \
+          | grep -v '^{{.PKG}}' || true)
+        if [ -n "$bad" ]; then
+          echo "forbidden dependency in pkg/:" >&2
+          echo "$bad" >&2
+          exit 1
+        fi
+        echo "dependency policy OK: stdlib + golang.org/x/sys only"
+
+  # ------------------------------------------------------------------- tooling
+
+  tools:install:
+    desc: Install pinned dev tools
+    cmds:
+      - go install mvdan.cc/gofumpt@latest
+      - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
+  release:
+    desc: Pre-release verification for tag {{.TAG}}
+    preconditions:
+      - sh: '[ -n "{{.TAG}}" ]'
+        msg: 'usage: task release TAG=v0.1.0'
+    cmds:
+      - task: check
+      - task: deps:verify
+      - grep -q '{{.TAG}}' CHANGELOG.md || (echo '{{.TAG}} missing from CHANGELOG.md' >&2; exit 1)
+      - git tag -a {{.TAG}} -m 'Release {{.TAG}}'
+      - echo 'Tagged {{.TAG}}. Push with: git push origin {{.TAG}}'

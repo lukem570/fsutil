@@ -1,0 +1,21 @@
+# Binaries
+/bin/
+/dist/
+cmd/fsutil/fsutil
+*.exe
+*.test
+
+# Coverage / profiling
+*.out
+coverage.txt
+coverage.html
+*.prof
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

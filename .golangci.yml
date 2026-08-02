@@ -1,0 +1,67 @@
+version: "2"
+
+run:
+  timeout: 5m
+  # Backends are build-tagged per platform; lint each platform in CI by setting
+  # GOOS, otherwise most backend files are invisible to the linter.
+  build-tags:
+    - conformance
+
+linters:
+  enable:
+    - bodyclose
+    - depguard
+    - errcheck
+    - errorlint
+    - gocritic
+    - govet
+    - ineffassign
+    - misspell
+    - nilerr
+    - staticcheck
+    - unconvert
+    - unused
+
+  settings:
+    depguard:
+      rules:
+        # Constraint #3 from CLAUDE.md, enforced mechanically rather than by
+        # discipline: library code may import stdlib and golang.org/x/sys only.
+        library:
+          files:
+            - '**/pkg/**'
+            - '**/internal/**'
+            - '!**/*_test.go'
+          allow:
+            - $gostd
+            - golang.org/x/sys
+            - github.com/lukem570/fsutil
+
+    errcheck:
+      # Close() on a watcher teardown path is routinely deferred; everything else
+      # must be checked.
+      check-type-assertions: true
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+      disabled-checks:
+        - ifElseChain
+        - hugeParam
+
+  exclusions:
+    rules:
+      # Syscall wrappers legitimately use unsafe and raw integer conversions.
+      - path: 'pkg/v1/(notify|lock)/.*_(linux|windows|darwin|bsd|unix|illumos)\.go'
+        linters:
+          - gocritic
+      - path: '_test\.go'
+        linters:
+          - errcheck
+          - gocritic
+
+formatters:
+  enable:
+    - gofumpt
