@@ -183,7 +183,7 @@ func (w *Watcher) Add(path string) error { return w.AddWith(path) }
 // It fails with [ErrUnsupported] if an option asks for something the selected
 // backend cannot do, rather than accepting the option and never delivering the
 // events it implies.
-func (w *Watcher) AddWith(path string, opts ...addOpt) error {
+func (w *Watcher) AddWith(path string, opts ...AddOption) error {
 	// Keep the Watcher alive for the duration of the call. Without this the
 	// collector may observe that the receiver is dead as soon as its state
 	// pointer has been loaded, and run the cleanup while the call is still in

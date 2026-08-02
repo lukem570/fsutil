@@ -1,0 +1,80 @@
+name: Bug report
+description: Something behaves differently from how it is documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Filesystem behaviour varies enormously between platforms and between
+        filesystems on the same platform, so the environment questions below
+        are usually what makes a report actionable. The filesystem in
+        particular is often the entire answer.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: >
+        A short Go program, or a sequence of shell commands. If you can
+        reproduce it with the bundled tool, that is ideal —
+        `fsutil watch -recursive ./dir` while doing whatever triggers it.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and version
+      placeholder: "Ubuntu 24.04 (kernel 6.8.0), macOS 15.1, Windows 11 24H2, FreeBSD 14.1"
+    validations:
+      required: true
+
+  - type: input
+    id: filesystem
+    attributes:
+      label: Filesystem
+      description: >
+        Run `df -T <path>` on Linux or `mount | grep <path>` elsewhere. Network
+        and overlay filesystems behave very differently from local ones, and
+        several report no events at all.
+      placeholder: "ext4, APFS, NTFS, overlayfs, NFSv4, sshfs"
+    validations:
+      required: true
+
+  - type: input
+    id: backend
+    attributes:
+      label: Backend in use
+      description: "Output of `fsutil backends`, or the value of Watcher.Backend()."
+      placeholder: "inotify"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Module version and Go version
+      placeholder: "v0.1.0, go1.24.5"
+    validations:
+      required: true
+
+  - type: textarea
+    id: debug
+    attributes:
+      label: Debug trace
+      description: >
+        Output with `FSUTIL_DEBUG=1` set. This shows raw kernel events before
+        translation, which is what distinguishes "the kernel never told us"
+        from "we dropped it" — usually the first thing worth knowing.
+      render: text
+    validations:
+      required: false

@@ -100,6 +100,10 @@ type kqueueBackend struct {
 	kq   int
 	wake [2]int
 
+	// budget bounds how many descriptors watching may hold, so that a watcher
+	// on a large tree cannot starve the program it belongs to.
+	budget *fdBudget
+
 	mu     sync.Mutex
 	byFD   map[int]*kqWatch
 	byPath map[string]*kqWatch
@@ -110,7 +114,7 @@ type kqueueBackend struct {
 	wg        sync.WaitGroup
 }
 
-func newKqueueBackend(s sink, _ config) (backend, error) {
+func newKqueueBackend(s sink, cfg config) (backend, error) {
 	kq, err := unix.Kqueue()
 	if err != nil {
 		return nil, fmt.Errorf("creating kernel queue: %w", err)
@@ -126,6 +130,7 @@ func newKqueueBackend(s sink, _ config) (backend, error) {
 	b := &kqueueBackend{
 		sink:   s,
 		kq:     kq,
+		budget: newFDBudget(cfg.fdBudget),
 		byFD:   make(map[int]*kqWatch),
 		byPath: make(map[string]*kqWatch),
 	}
@@ -147,6 +152,11 @@ func newKqueueBackend(s sink, _ config) (backend, error) {
 }
 
 func (b *kqueueBackend) Kind() Backend { return BackendKqueue }
+
+// budgetStats reports descriptor accounting for Watcher.Stats.
+func (b *kqueueBackend) budgetStats() (held, budget, denied, limit int) {
+	return b.budget.snapshot()
+}
 
 func (b *kqueueBackend) Capabilities() Capability { return factoryCaps[BackendKqueue] }
 
@@ -225,8 +235,21 @@ func (b *kqueueBackend) Add(path string, opts addOpts) error {
 
 // watchLocked opens and arms a path. b.mu must be held.
 func (b *kqueueBackend) watchLocked(path string, isDir, explicit bool, opts addOpts) (*kqWatch, error) {
+	// A path the caller asked for is always watched, even if that exceeds the
+	// budget: refusing an explicit Add because of an internal accounting limit
+	// would be a worse failure than the one the budget exists to prevent. The
+	// budget governs the descriptors this backend opens on its own initiative
+	// — those for the individual files inside a watched directory — which are
+	// exactly the ones it can do without.
+	if explicit {
+		b.budget.reserve()
+	} else if !b.budget.acquire() {
+		return nil, errFDBudgetExhausted
+	}
+
 	fd, err := openForWatch(path, opts.noFollow)
 	if err != nil {
+		b.budget.release()
 		return nil, kqOpenError(path, err)
 	}
 
@@ -236,6 +259,7 @@ func (b *kqueueBackend) watchLocked(path string, isDir, explicit bool, opts addO
 	}
 	if err := b.registerVnode(fd, fflags); err != nil {
 		_ = unix.Close(fd)
+		b.budget.release()
 		return nil, fmt.Errorf("watching %s: %w", path, err)
 	}
 
@@ -290,6 +314,7 @@ func (b *kqueueBackend) dropLocked(w *kqWatch) {
 	}
 
 	_ = unix.Close(w.fd)
+	b.budget.release()
 }
 
 // dropTreeLocked releases a watch and any child watches beneath it.

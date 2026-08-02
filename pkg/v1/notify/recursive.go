@@ -97,6 +97,18 @@ func (b *recursiveBackend) Capabilities() Capability {
 
 func (b *recursiveBackend) Close() error { return b.inner.Close() }
 
+// budgetStats forwards descriptor accounting from the wrapped backend.
+//
+// Without this the wrapper would hide it: the watcher asks whichever backend
+// it holds, and on every platform with a per-path descriptor cost that backend
+// is this wrapper rather than the one actually spending them.
+func (b *recursiveBackend) budgetStats() (held, budget, denied, limit int) {
+	if bb, ok := b.inner.(budgeter); ok {
+		return bb.budgetStats()
+	}
+	return 0, 0, 0, 0
+}
+
 func (b *recursiveBackend) Add(path string, opts addOpts) error {
 	if !opts.recursive {
 		if err := b.inner.Add(path, opts); err != nil {

@@ -94,7 +94,7 @@ func (c *config) validate() error {
 	return nil
 }
 
-// addOpts holds per-watch settings assembled from [addOpt] values.
+// addOpts holds per-watch settings assembled from [AddOption] values.
 type addOpts struct {
 	ops        Op
 	bufferSize int
@@ -113,11 +113,13 @@ func defaultAddOpts() addOpts {
 // events into one. 64 KiB holds a few hundred events of typical path length.
 const defaultBufferSize = 64 * 1024
 
-// addOpt configures a single watch. Options are passed to [Watcher.AddWith].
+// AddOption configures a single watch. Options are passed to [Watcher.AddWith].
 //
-// The type is deliberately unexported: it exists so that the option set can
-// grow without breaking callers, not so that callers can implement it.
-type addOpt interface{ applyAdd(*addOpts) }
+// The type is exported but its method is not, which is deliberate. Callers
+// need to name the type — assembling a list of options from configuration and
+// passing it on is ordinary — but nothing outside this package can implement
+// it, so the option set can grow without breaking anyone.
+type AddOption interface{ applyAdd(*addOpts) }
 
 type addOptFunc func(*addOpts)
 
@@ -132,7 +134,7 @@ func (f addOptFunc) applyAdd(o *addOpts) { f(o) }
 // Raise it when watching a directory that changes in large bursts: if the
 // buffer fills before the watcher drains it, the kernel discards the overflow
 // and reports [ErrEventOverflow] on the Errors channel.
-func WithBufferSize(bytes int) addOpt {
+func WithBufferSize(bytes int) AddOption {
 	return addOptFunc(func(o *addOpts) { o.bufferSize = bytes })
 }
 
@@ -147,7 +149,7 @@ func WithBufferSize(bytes int) addOpt {
 // fails with [ErrUnsupported] rather than silently never firing:
 //
 //	err := w.AddWith("/srv/upload", notify.WithOps(notify.UnportableCloseWrite))
-func WithOps(ops ...Op) addOpt {
+func WithOps(ops ...Op) AddOption {
 	return addOptFunc(func(o *addOpts) {
 		var mask Op
 		for _, op := range ops {
@@ -162,7 +164,7 @@ func WithOps(ops ...Op) addOpt {
 // By default, adding a symlink watches whatever it points at. With this option
 // the link is watched directly, so the watch reports the link being replaced
 // or removed and reports nothing about the target.
-func WithNoFollow() addOpt {
+func WithNoFollow() AddOption {
 	return addOptFunc(func(o *addOpts) { o.noFollow = true })
 }
 
@@ -172,7 +174,7 @@ func WithNoFollow() addOpt {
 // It is equivalent to appending "/..." to the path. Recursion is not free:
 // backends without native support maintain a watch per directory, so a deep
 // tree consumes proportionally many kernel resources. See [WithFDBudget].
-func WithRecursive() addOpt {
+func WithRecursive() AddOption {
 	return addOptFunc(func(o *addOpts) { o.recursive = true })
 }
 
