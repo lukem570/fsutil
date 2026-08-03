@@ -310,3 +310,81 @@ func countEvents(events []Event, path string, op Op) int {
 	}
 	return n
 }
+
+// TestNestedRootsSurviveRemovingTheOuterOne is the regression test for a
+// defect that produced no error at all.
+//
+// Two recursive watches can cover the same directory. If the inner watch that
+// covers it is torn down when either one is removed, the survivor goes quiet:
+// it is still listed, still reports no error, and simply stops seeing part of
+// its tree. Silent partial coverage is the worst failure a watcher has,
+// because nothing distinguishes it from a quiet filesystem.
+func TestNestedRootsSurviveRemovingTheOuterOne(t *testing.T) {
+	eachRecursiveBackend(t, func(t *testing.T, kind Backend) {
+		outer := t.TempDir()
+		inner := filepath.Join(outer, "inner")
+		if err := os.Mkdir(inner, 0o755); err != nil {
+			t.Fatalf("Mkdir: %s", err)
+		}
+
+		w, c := newTestWatcherOn(t, kind)
+		if err := w.AddWith(outer, WithRecursive()); err != nil {
+			t.Fatalf("AddWith(outer): %s", err)
+		}
+		if err := w.AddWith(inner, WithRecursive()); err != nil {
+			t.Fatalf("AddWith(inner): %s", err)
+		}
+
+		// Removing the outer watch must not disturb the inner one, even though
+		// both were covering the same directory.
+		if err := w.Remove(outer); err != nil {
+			t.Fatalf("Remove(outer): %s", err)
+		}
+
+		file := filepath.Join(inner, "still-watched.txt")
+		writeFile(t, file, "content")
+		c.await(t, "an event from the surviving nested watch", func(evs []Event) bool {
+			return hasEvent(evs, file, Create)
+		})
+	})
+}
+
+// TestOverlappingRootsReleaseEverythingEventually checks the other direction:
+// shared watches must not outlive the last watch that needed them, or a
+// long-running process leaks a kernel watch per directory ever shared.
+func TestOverlappingRootsReleaseEverythingEventually(t *testing.T) {
+	eachRecursiveBackend(t, func(t *testing.T, kind Backend) {
+		outer := t.TempDir()
+		inner := filepath.Join(outer, "inner")
+		if err := os.MkdirAll(filepath.Join(inner, "deep"), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %s", err)
+		}
+
+		w, _ := newTestWatcherOn(t, kind)
+		rb, wrapped := w.state.backend.(*recursiveBackend)
+		if !wrapped {
+			t.Skipf("backend %s watches recursively without the wrapper", kind)
+		}
+
+		for _, root := range []string{outer, inner} {
+			if err := w.AddWith(root, WithRecursive()); err != nil {
+				t.Fatalf("AddWith(%s): %s", root, err)
+			}
+		}
+		for _, root := range []string{outer, inner} {
+			if err := w.Remove(root); err != nil {
+				t.Fatalf("Remove(%s): %s", root, err)
+			}
+		}
+
+		if got := rb.inner.WatchList(); len(got) != 0 {
+			t.Errorf("inner watches after removing both roots = %v, want none", got)
+		}
+		rb.mu.Lock()
+		refs := len(rb.dirRefs)
+		rb.mu.Unlock()
+		if refs != 0 {
+			t.Errorf("%d reference counts left behind, want 0", refs)
+		}
+	})
+}

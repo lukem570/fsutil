@@ -21,6 +21,17 @@ Pre-release. The API is settling but not yet frozen.
 - `pkg/v1/notify`: polling backend, available on every supported platform and
   the only option on network and virtual filesystems.
 - `pkg/v1/notify`: inotify backend for Linux.
+- `pkg/v1/notify`: fanotify backend for Linux 5.9 and newer. Never selected
+  automatically, since it requires CAP_SYS_ADMIN and a backend that works only
+  because a process happens to be privileged is not one to depend on silently.
+  Paths are resolved by matching recorded directory handles rather than through
+  `open_by_handle_at`, which avoids needing a second capability.
+- `pkg/v1/notify`: Windows backend using ReadDirectoryChangesW, with native
+  subtree watching, so a recursive watch costs one handle for a whole tree.
+- `pkg/v1/notify`: a descriptor budget, so the number of watchable paths is not
+  bounded by the process limit on open files and a watcher cannot starve the
+  program it belongs to. `Watcher.Stats()` makes any resulting loss of
+  precision observable.
 - `pkg/v1/notify`: kqueue backend for macOS and the BSDs. Per-file descriptors
   are opened only when a watch asks for `Write` or `Chmod`, so a watch
   interested only in creation and removal costs one descriptor per directory.
@@ -46,8 +57,11 @@ Pre-release. The API is settling but not yet frozen.
 
 ### Known gaps
 
-- Windows and illumos have no native backend yet and fall back to polling.
-- The kqueue backend compiles and vets on all six BSD targets but has not yet
-  run on one; CI exists to close that gap.
-- Two recursive watches sharing a subdirectory: removing one releases the
-  shared inner watch.
+- The kqueue and Windows backends compile and vet for every target they claim,
+  but have not yet run on one — there was no host available while they were
+  written. CI on real machines exists to close that gap. Treat them as
+  unverified until it has.
+- illumos and Solaris have no native backend and fall back to polling.
+- Where a backend runs out of descriptor budget, affected files keep their
+  creation, removal and rename events but lose modification events. See
+  `Watcher.Stats().DescriptorsDenied`.

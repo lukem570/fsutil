@@ -58,6 +58,14 @@ type recursiveBackend struct {
 	// synthesized records paths already reported by a walk, so that a kernel
 	// event for the same path can be recognised as a duplicate and dropped.
 	synthesized map[string]time.Time
+	// dirRefs counts how many recursive watches need each inner watch.
+	//
+	// Two recursive watches can cover the same directory — one nested inside
+	// the other, or two siblings whose trees overlap through a link. Without a
+	// count, removing either would tear down the inner watch the other still
+	// depends on, and that watch would go quiet with nothing reporting an
+	// error.
+	dirRefs map[string]int
 }
 
 func newRecursiveBackend(f backendFactory, out sink, cfg config) (backend, error) {
@@ -66,6 +74,7 @@ func newRecursiveBackend(f backendFactory, out sink, cfg config) (backend, error
 		roots:       make(map[string]*recRoot),
 		plain:       make(map[string]bool),
 		synthesized: make(map[string]time.Time),
+		dirRefs:     make(map[string]int),
 	}
 
 	inner, err := f.new(recursiveSink{b}, cfg)
@@ -74,6 +83,49 @@ func newRecursiveBackend(f backendFactory, out sink, cfg config) (backend, error
 	}
 	b.inner = inner
 	return b, nil
+}
+
+// retain establishes an inner watch on dir for one recursive watch, sharing an
+// existing one if another already needs it.
+func (b *recursiveBackend) retain(dir string, opts addOpts) error {
+	b.mu.Lock()
+	b.dirRefs[dir]++
+	first := b.dirRefs[dir] == 1
+	b.mu.Unlock()
+
+	if !first {
+		return nil
+	}
+	if err := b.inner.Add(dir, opts); err != nil {
+		b.mu.Lock()
+		if b.dirRefs[dir]--; b.dirRefs[dir] <= 0 {
+			delete(b.dirRefs, dir)
+		}
+		b.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// release gives up one recursive watch's interest in an inner watch, removing
+// it only once nothing needs it.
+func (b *recursiveBackend) release(dir string) {
+	b.mu.Lock()
+	b.dirRefs[dir]--
+	last := b.dirRefs[dir] <= 0
+	if last {
+		delete(b.dirRefs, dir)
+	}
+	b.mu.Unlock()
+
+	if !last {
+		return
+	}
+	// The kernel has usually dropped this already, when the directory it
+	// referred to no longer exists.
+	if err := b.inner.Remove(dir); err != nil && !errors.Is(err, ErrNonExistentWatch) {
+		debugf("releasing watch on %s: %s", dir, err)
+	}
 }
 
 // recursiveSink is the sink the wrapped backend delivers to.
@@ -127,12 +179,12 @@ func (b *recursiveBackend) Add(path string, opts addOpts) error {
 
 	added := make(map[string]bool, len(dirs))
 	for _, dir := range dirs {
-		if err := b.inner.Add(dir, opts); err != nil {
+		if err := b.retain(dir, opts); err != nil {
 			// Leave nothing half-established: a partially watched tree would
 			// report some changes and silently miss others, which is worse
 			// than reporting none.
 			for d := range added {
-				_ = b.inner.Remove(d)
+				b.release(d)
 			}
 			return err
 		}
@@ -167,16 +219,13 @@ func (b *recursiveBackend) Remove(path string) error {
 		// parent removed while its children are still registered.
 		sort.Sort(sort.Reverse(sort.StringSlice(dirs)))
 
-		var firstErr error
 		for _, d := range dirs {
 			// A directory that has already gone was watched until it did; the
-			// kernel dropped that watch for us and its absence here is not a
-			// failure to remove anything.
-			if err := b.inner.Remove(d); err != nil && !errors.Is(err, ErrNonExistentWatch) && firstErr == nil {
-				firstErr = err
-			}
+			// kernel dropped that watch for us, and another recursive watch may
+			// still need this one, so release rather than remove.
+			b.release(d)
 		}
-		return firstErr
+		return nil
 
 	case isPlain:
 		return b.inner.Remove(path)
@@ -306,7 +355,7 @@ func (b *recursiveBackend) adopt(rootPath, dir string) []string {
 	}
 
 	for _, d := range dirs {
-		if err := b.inner.Add(d, opts); err != nil {
+		if err := b.retain(d, opts); err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
 				b.out.fail(err)
 			}
@@ -346,11 +395,7 @@ func (b *recursiveBackend) prune(rootPath, path string) {
 	b.mu.Unlock()
 
 	for _, dir := range gone {
-		// The kernel has usually dropped these already, since the directory
-		// they referred to no longer exists.
-		if err := b.inner.Remove(dir); err != nil && !errors.Is(err, ErrNonExistentWatch) {
-			debugf("pruning watch on %s: %s", dir, err)
-		}
+		b.release(dir)
 	}
 }
 

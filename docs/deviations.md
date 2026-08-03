@@ -95,9 +95,9 @@ once per watch. Kernel backends behave this way naturally, since they report a
 change to a *file*; the polling backend was changed to match, because a caller
 should not be able to tell which backend they are using by counting events.
 
-Removing one of two recursive watches that share a subdirectory currently
-releases the shared inner watch. This is a known defect rather than a
-deviation, and is recorded as such.
+Watches shared between two overlapping recursive roots are reference-counted,
+so removing one root leaves the other's coverage intact and the last one to go
+releases it.
 
 ## Descriptor budget
 
