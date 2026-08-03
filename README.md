@@ -136,6 +136,10 @@ because a goroutine parked in a blocking lock syscall cannot be interrupted by
 a context. Cancellation therefore works, at the price of up to one retry
 interval of latency.
 
+[docs/locking.md](docs/locking.md) covers the rest: crash safety and where it
+does not hold, diagnosing a wait, and why locking over a network filesystem is
+not something to attempt.
+
 ## Backends
 
 | Backend | Platform | Mechanism | Status |
