@@ -324,14 +324,16 @@ func (st *lockState) acquire(ctx context.Context, mode Mode) error {
 		defer cancel()
 	}
 
+	// The timer is built only once an attempt has failed. Most acquisitions
+	// succeed immediately, and creating a timer for them costs an allocation
+	// and a runtime registration to describe a wait that never happens.
 	delay := st.opts.retryInterval
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	// The first attempt has not waited for anything, so the timer must not be
-	// consulted until after it has failed.
-	if !timer.Stop() {
-		<-timer.C
-	}
+	var timer *time.Timer
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 
 	for {
 		ok, err := st.tryAcquire(mode)
@@ -348,7 +350,11 @@ func (st *lockState) acquire(ctx context.Context, mode Mode) error {
 			return fmt.Errorf("lock: waiting for %s: %w", st.path, err)
 		}
 
-		timer.Reset(delay)
+		if timer == nil {
+			timer = time.NewTimer(delay)
+		} else {
+			timer.Reset(delay)
+		}
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
