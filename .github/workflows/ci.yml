@@ -180,7 +180,12 @@ jobs:
             curl -sSLo /tmp/go.tar.gz "https://dl.google.com/go/go1.24.6.illumos-amd64.tar.gz"
             ls -l /tmp/go.tar.gz
             mkdir -p /opt
-            cd /opt && gzip -dc /tmp/go.tar.gz | tar xf -
+            # The System V tar does not understand the PAX extended headers on a
+            # handful of files inside Go's own test fixtures, and exits
+            # non-zero having converted them to regular files. Those files are
+            # never used here, so the status is ignored and the extraction is
+            # judged by whether the toolchain it was for actually appeared.
+            cd /opt && gzip -dc /tmp/go.tar.gz | tar xf - || true
             ls -l /opt/go/bin/go
             /opt/go/bin/go version
           run: |
