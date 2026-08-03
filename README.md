@@ -150,13 +150,14 @@ not something to attempt.
 | `kqueue` | macOS, FreeBSD, OpenBSD, NetBSD, DragonFly | `EVFILT_VNODE` | verified |
 | `directory-changes` | Windows | `ReadDirectoryChangesW` | verified |
 | `usn-journal` | Windows | NTFS change journal | planned |
-| `fen` | illumos, Solaris | `port_create` | awaiting CI |
+| `fen` | illumos, Solaris | `port_create` | verified |
 
 "Verified" means the backend passes the conformance suite on a real machine in
 CI, not merely that it compiles. "Awaiting CI" means it compiles and vets but
 has not yet run. Every one above runs on Linux (amd64 and
 arm64), macOS (Intel and Apple Silicon), Windows (amd64 and arm64), FreeBSD,
-OpenBSD and NetBSD. DragonFly is covered by cross-compilation only.
+OpenBSD, NetBSD and illumos. DragonFly and Solaris are covered by
+cross-compilation only.
 
 `fanotify` is never selected automatically, because a backend that works only
 when a process happens to be privileged is not something to depend on silently.

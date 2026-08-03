@@ -1,3 +1,5 @@
+//go:build darwin || dragonfly || freebsd || netbsd || openbsd || illumos || solaris
+
 package notify
 
 import (
@@ -5,6 +7,11 @@ import (
 	"sort"
 )
 
+// The build constraint lists exactly the platforms whose backend needs these.
+// Compiling them anywhere else leaves them unreferenced, which is a defect
+// rather than a nuisance: it means a platform is carrying code for a problem
+// it does not have.
+//
 // Shared by the backends whose kernel interface reports that a directory
 // changed without saying how. kqueue and FEN both do this, and discovering
 // which name appeared or vanished means comparing the listing against the
