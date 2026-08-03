@@ -387,11 +387,11 @@ func (b *windowsBackend) read() {
 		// handle must not be touched: the value has already been closed and
 		// Windows may have given it to another part of this program.
 		b.mu.Lock()
-		still := b.watches[w.id] == w && !b.closed
-		if still {
+		if b.watches[w.id] == w && !b.closed {
 			if err := b.armLocked(w); err != nil {
+				// The watch cannot be continued, so retire it rather than
+				// leaving an entry that will never report anything again.
 				b.retireLocked(w)
-				still = false
 			}
 		}
 		b.mu.Unlock()
