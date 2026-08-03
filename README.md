@@ -212,6 +212,7 @@ go build -o bin/fsutil ./cmd/fsutil
 bin/fsutil backends                    # what this host offers
 bin/fsutil watch -recursive ./dir      # print events as they happen
 bin/fsutil watch -recursive -exclude .git,node_modules ./repo
+bin/fsutil watch -stats 5s ./big-tree # report watch and descriptor counts
 bin/fsutil lock /tmp/x.lock -- make    # run a command holding a lock
 ```
 

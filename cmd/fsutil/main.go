@@ -135,6 +135,7 @@ func watchCmd(ctx context.Context, args []string) error {
 	opsFlag := fs.String("ops", "", "comma-separated operations to report (create,write,remove,rename,chmod)")
 	noFollow := fs.Bool("nofollow", false, "watch a symlink itself rather than its target")
 	exclude := fs.String("exclude", "", "comma-separated patterns to skip, e.g. .git,node_modules,*.tmp")
+	stats := fs.Duration("stats", 0, "report watch and descriptor counts on this interval")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -173,10 +174,23 @@ func watchCmd(ctx context.Context, args []string) error {
 	fmt.Fprintf(os.Stderr, "watching %d path(s) with the %s backend; interrupt to stop\n",
 		len(w.WatchList()), w.Backend())
 
+	// The documentation tells people to watch DescriptorsDenied to find out
+	// whether a watcher has quietly stopped reporting modifications to some
+	// files. That is only useful advice if there is a way to see it.
+	var ticks <-chan time.Time
+	if *stats > 0 {
+		ticker := time.NewTicker(*stats)
+		defer ticker.Stop()
+		ticks = ticker.C
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
+			reportStats(w)
 			return nil
+		case <-ticks:
+			reportStats(w)
 		case ev, ok := <-w.Events:
 			if !ok {
 				return nil
@@ -188,6 +202,20 @@ func watchCmd(ctx context.Context, args []string) error {
 			}
 			fmt.Fprintf(os.Stderr, "error: %s\n", err)
 		}
+	}
+}
+
+// reportStats prints what the watcher is consuming, and says plainly when it
+// has begun reporting less than it otherwise would.
+func reportStats(w *notify.Watcher) {
+	s := w.Stats()
+	fmt.Fprintf(os.Stderr, "stats: %s\n", s)
+	if s.DescriptorsDenied > 0 {
+		fmt.Fprintf(os.Stderr,
+			"  note: the descriptor budget was reached %d time(s), so modifications to some\n"+
+				"  files are no longer reported. Creation, removal and renaming still are.\n"+
+				"  Raise the process limit on open files, or watch fewer paths.\n",
+			s.DescriptorsDenied)
 	}
 }
 
