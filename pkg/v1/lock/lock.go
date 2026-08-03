@@ -472,7 +472,7 @@ func Mechanism() string { return lockingKind }
 func IsMandatory() bool { return lockingIsMandatory }
 
 // fileModeOrDefault is used by options.
-func fileModeOrDefault(m fs.FileMode, def fs.FileMode) fs.FileMode {
+func fileModeOrDefault(m, def fs.FileMode) fs.FileMode {
 	if m == 0 {
 		return def
 	}

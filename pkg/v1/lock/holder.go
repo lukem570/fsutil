@@ -64,7 +64,10 @@ func readHolder(f *os.File) (Holder, error) {
 
 	var h Holder
 	if err := json.Unmarshal(trimRecord(buf[:n]), &h); err != nil {
-		return Holder{}, nil
+		// Deliberately not an error. Any process may write to this file, so
+		// contents that make no sense are expected rather than exceptional,
+		// and the caller wants "nothing recorded" rather than a failure.
+		return Holder{}, nil //nolint:nilerr // see above
 	}
 	return h, nil
 }

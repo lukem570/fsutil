@@ -147,12 +147,6 @@ func (s Stats) String() string {
 		s.Watches, s.Descriptors, s.DescriptorBudget, s.DescriptorsDenied, s.ProcessFDLimit)
 }
 
-// errFDBudgetExhausted is returned internally when an optional descriptor
-// cannot be afforded. It never reaches a caller: a backend that sees it
-// declines to watch that individual file and carries on, which costs
-// modification events for that file and nothing else.
-var errFDBudgetExhausted = fmt.Errorf("%w: descriptor budget exhausted", ErrUnsupported)
-
 // budgeter is implemented by backends that spend descriptors per path.
 //
 // It is a separate interface rather than a method on every backend so that

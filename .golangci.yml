@@ -54,9 +54,13 @@ linters:
   exclusions:
     rules:
       # Syscall wrappers legitimately use unsafe and raw integer conversions.
-      - path: 'pkg/v1/(notify|lock)/.*_(linux|windows|darwin|bsd|unix|illumos)\.go'
+      # Integer widths in stat structures vary by architecture, so a conversion
+      # that is redundant on one is required on another. Linting a single
+      # platform cannot tell the difference.
+      - path: 'pkg/v1/(notify|lock)/.*_(linux|windows|darwin|bsd|unix|illumos|flock|aix|other|pipe2)\.go'
         linters:
           - gocritic
+          - unconvert
       - path: '_test\.go'
         linters:
           - errcheck

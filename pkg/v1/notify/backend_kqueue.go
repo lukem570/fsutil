@@ -63,6 +63,12 @@ func init() {
 	})
 }
 
+// errFDBudgetExhausted is returned internally when an optional descriptor
+// cannot be afforded. It never reaches a caller: seeing it, this backend
+// declines to watch that individual file and carries on, which costs
+// modification events for that file and nothing else.
+var errFDBudgetExhausted = fmt.Errorf("%w: descriptor budget exhausted", ErrUnsupported)
+
 func kqueueAvailable() bool {
 	kq, err := unix.Kqueue()
 	if err != nil {

@@ -98,7 +98,8 @@ func (b *recursiveBackend) retain(dir string, opts addOpts) error {
 	}
 	if err := b.inner.Add(dir, opts); err != nil {
 		b.mu.Lock()
-		if b.dirRefs[dir]--; b.dirRefs[dir] <= 0 {
+		b.dirRefs[dir]--
+		if b.dirRefs[dir] <= 0 {
 			delete(b.dirRefs, dir)
 		}
 		b.mu.Unlock()
@@ -459,7 +460,7 @@ func (b *recursiveBackend) consumeSynthesized(path string) bool {
 // it outside. A recursive watch that followed symlinks would place watches on
 // arbitrary parts of the filesystem, which is both surprising and an easy way
 // to exhaust the kernel's watch limit.
-func collectDirs(path string) ([]string, error) {
+func collectDirs(path string) (dirs []string, err error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
@@ -474,7 +475,7 @@ func collectDirs(path string) ([]string, error) {
 	}
 	defer func() { _ = dir.Close() }()
 
-	dirs := []string{path}
+	dirs = []string{path}
 	err = fs.WalkDir(dir.FS(), ".", func(p string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			// Trees change while being walked, and a directory we cannot read

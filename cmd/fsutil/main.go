@@ -27,10 +27,15 @@ import (
 	"github.com/lukem570/fsutil/pkg/v1/notify"
 )
 
-func main() {
+func main() { os.Exit(run()) }
+
+// run holds the body of main so that deferred work still happens: os.Exit does
+// not run deferred functions, so calling it from main would skip the signal
+// handler's cleanup.
+func run() int {
 	if len(os.Args) < 2 {
 		usage()
-		os.Exit(2)
+		return 2
 	}
 
 	// Interrupting is the normal way to stop `watch`, so it is a clean exit
@@ -49,17 +54,22 @@ func main() {
 		err = backendsCmd()
 	case "-h", "--help", "help":
 		usage()
-		return
+		return 0
 	default:
 		fmt.Fprintf(os.Stderr, "fsutil: unknown command %q\n\n", os.Args[1])
 		usage()
-		os.Exit(2)
+		return 2
 	}
 
+	var status *exitStatus
+	if errors.As(err, &status) {
+		return status.code
+	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintf(os.Stderr, "fsutil: %s\n", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func usage() {
@@ -301,10 +311,17 @@ func lockCmd(ctx context.Context, args []string) error {
 		if errors.As(err, &exitErr) {
 			// Pass the command's own exit status through, so that this wrapper
 			// is transparent to whatever called it.
-			defer os.Exit(exitErr.ExitCode())
-			return nil
+			return &exitStatus{code: exitExitCode(exitErr)}
 		}
 		return err
 	}
 	return nil
 }
+
+// exitStatus carries a wrapped command's exit code back to run, so that this
+// tool is transparent to whatever invoked it.
+type exitStatus struct{ code int }
+
+func (e *exitStatus) Error() string { return fmt.Sprintf("exit status %d", e.code) }
+
+func exitExitCode(err *exec.ExitError) int { return err.ExitCode() }
