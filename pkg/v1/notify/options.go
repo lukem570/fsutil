@@ -102,6 +102,12 @@ type addOpts struct {
 	noFollow   bool
 	recursive  bool
 	exclude    []string
+
+	// excludeHasPath records whether any pattern contains a separator, and so
+	// whether a path relative to the watch root has to be computed at all.
+	// Almost every pattern in practice is a bare name — ".git",
+	// "node_modules", "*.tmp" — which only ever needs the final element.
+	excludeHasPath bool
 }
 
 func defaultAddOpts() addOpts {
@@ -201,7 +207,14 @@ func WithRecursive() AddOption {
 // Adding an excluded path directly is still honoured — the option describes
 // what to skip while descending, not what may be watched.
 func WithExclude(patterns ...string) AddOption {
-	return addOptFunc(func(o *addOpts) { o.exclude = append(o.exclude, patterns...) })
+	return addOptFunc(func(o *addOpts) {
+		o.exclude = append(o.exclude, patterns...)
+		for _, pattern := range patterns {
+			if strings.ContainsRune(pattern, '/') {
+				o.excludeHasPath = true
+			}
+		}
+	})
 }
 
 // excluded reports whether path, which lies under root, matches any exclusion.
@@ -211,20 +224,32 @@ func (o *addOpts) excluded(root, path string) bool {
 	}
 
 	base := filepath.Base(path)
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		rel = ""
-	}
-	rel = filepath.ToSlash(rel)
-
 	for _, pattern := range o.exclude {
 		if ok, err := path2.Match(pattern, base); err == nil && ok {
 			return true
 		}
-		if rel != "" && rel != "." {
-			if ok, err := path2.Match(pattern, rel); err == nil && ok {
-				return true
-			}
+	}
+
+	// Deriving the path relative to the root costs more than matching against
+	// it, so it is done only when some pattern could actually use it. This
+	// runs for every path considered during a walk and every event delivered,
+	// which is often enough for the difference to be worth having.
+	if !o.excludeHasPath {
+		return false
+	}
+
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == "" || rel == "." {
+		return false
+	}
+
+	for _, pattern := range o.exclude {
+		if ok, err := path2.Match(pattern, rel); err == nil && ok {
+			return true
 		}
 	}
 	return false
