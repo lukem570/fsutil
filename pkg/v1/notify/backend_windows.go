@@ -195,14 +195,18 @@ func (b *windowsBackend) Add(path string, opts addOpts) error {
 
 	b.nextID++
 	w := &wsWatch{
-		id:      b.nextID,
-		handle:  handle,
-		path:    path,
-		opts:    opts,
-		filter:  filter,
-		buf:     make([]byte, max(opts.bufferSize, wsBufferSize)),
-		mask:    windowsMask(opts.ops),
-		subtree: opts.recursive,
+		id:     b.nextID,
+		handle: handle,
+		path:   path,
+		opts:   opts,
+		filter: filter,
+		buf:    make([]byte, max(opts.bufferSize, wsBufferSize)),
+		mask:   windowsMask(opts.ops),
+		// Never a subtree watch. Recursion is provided by the wrapper, which
+		// adds one watch per directory; leaving this set would make each of
+		// those cover the whole tree beneath it, so a file in a nested
+		// directory would be reported once per ancestor.
+		subtree: false,
 	}
 
 	// The completion key is our own identifier, never a handle or a pointer.

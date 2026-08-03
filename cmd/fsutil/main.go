@@ -84,7 +84,7 @@ func backendsCmd() error {
 	if err != nil {
 		return err
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	fmt.Printf("\nautomatic selection chose: %s\n", w.Backend())
 	fmt.Printf("capabilities: %s\n", describeCaps(w.Capabilities()))
@@ -147,7 +147,7 @@ func watchCmd(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	addOpts, err := buildAddOptions(*recursive, *noFollow, *opsFlag)
 	if err != nil {
@@ -277,7 +277,7 @@ func lockCmd(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	acquire := l.Lock
 	if *shared {
@@ -292,7 +292,7 @@ func lockCmd(ctx context.Context, args []string) error {
 		}
 		return err
 	}
-	defer l.Unlock()
+	defer func() { _ = l.Unlock() }()
 
 	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr

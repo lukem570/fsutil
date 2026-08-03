@@ -410,7 +410,7 @@ func scanTree(root string, out map[string]pollEntry) error {
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 
 	return fs.WalkDir(dir.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {

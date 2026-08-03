@@ -472,7 +472,7 @@ func collectDirs(path string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 
 	dirs := []string{path}
 	err = fs.WalkDir(dir.FS(), ".", func(p string, entry fs.DirEntry, err error) error {
@@ -502,7 +502,7 @@ func collectEntries(dir string) []string {
 	if err != nil {
 		return nil
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 
 	var out []string
 	_ = fs.WalkDir(root.FS(), ".", func(p string, _ fs.DirEntry, err error) error {
