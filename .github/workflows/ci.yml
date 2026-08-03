@@ -171,10 +171,14 @@ jobs:
         uses: vmactions/omnios-vm@v1
         with:
           usesh: true
+          # illumos ships the System V tar, where -C is not a global option but
+          # a separator within the file list, so the usual invocation is a
+          # usage error rather than an extraction. Changing directory first is
+          # what that tar expects.
           prepare: |
             mkdir -p /usr/local
             curl -sSLo /tmp/go.tar.gz "https://dl.google.com/go/go1.24.6.illumos-amd64.tar.gz"
-            gzip -dc /tmp/go.tar.gz | tar -C /usr/local -xf -
+            cd /usr/local && gzip -dc /tmp/go.tar.gz | tar xf -
           run: |
             PATH="/usr/local/go/bin:$PATH"; export PATH
             go version
