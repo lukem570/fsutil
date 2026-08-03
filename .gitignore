@@ -19,3 +19,6 @@ coverage.html
 # OS
 .DS_Store
 Thumbs.db
+
+# Lock files created by the runnable examples.
+pkg/v1/lock/testdata/
