@@ -80,9 +80,17 @@ func TestDegradedReportsChmod(t *testing.T) {
 	p.tick()
 	drainEvents(events)
 
-	if err := os.Chmod(file, 0o600); err != nil {
+	// Windows reflects only the read-only bit in a file's mode, so a change
+	// among the permission bits it does not model would be no change at all
+	// there. Clearing write is the one alteration every supported system
+	// records.
+	if err := os.Chmod(file, 0o444); err != nil {
 		t.Fatalf("Chmod: %s", err)
 	}
+	// Restored so that the temporary directory can be removed: Windows will
+	// not delete a read-only file.
+	t.Cleanup(func() { _ = os.Chmod(file, 0o644) })
+
 	p.tick()
 
 	if got := drainEvents(events); !hasEvent(got, file, Chmod) {
