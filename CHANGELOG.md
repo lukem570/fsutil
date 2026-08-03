@@ -58,6 +58,35 @@ Pre-release. The API is settling but not yet frozen.
 - CI runs the real test suite on real instances of every supported operating
   system, with virtual machines for those that have no hosted runner.
 
+### Testing
+
+- One conformance suite is run against every backend available on the host, so
+  each implementation is held to a single shared description of correct
+  behaviour rather than to tests written to match what it already did. Where a
+  backend genuinely cannot comply it says so through a capability and the test
+  skips, making platform differences visible in the output.
+- Stress and resource tests for the failures that need volume, churn or timing
+  to appear: descriptor leaks under repeated add/remove, four hundred
+  simultaneous watches, removal while events are in flight, shutdown against a
+  moving target.
+- Locking is tested between real processes by re-executing the test binary,
+  including the case that makes file locks usable at all — that the operating
+  system releases one whose holder was killed.
+- A differential test runs the polling backend as an oracle alongside the
+  native one on the same tree. Polling decides what happened by looking rather
+  than by being told, so a durable change it observed and the native backend
+  did not is a defect in the latter.
+- Fuzzers cover the path handling. The first run found an ambiguity rather than
+  a crash: "..." is a legal filename, so a trailing marker cannot be
+  distinguished from a directory named after it.
+- Benchmarks cover both packages, and have already found two costs invisible on
+  reading — a lock retry timer built before any attempt was made, and a
+  relative path derived on the hottest exclusion path.
+- Every test depending on garbage collection, a second process, or a race is
+  verified by negative control: the mechanism is deliberately broken and the
+  test confirmed to fail. A test that cannot fail is worse than none, because
+  it is trusted.
+
 ### Known gaps
 
 - The kqueue and Windows backends compile and vet for every target they claim,
