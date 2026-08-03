@@ -651,3 +651,55 @@ func TestMechanismIsReported(t *testing.T) {
 	}
 	t.Logf("locking on this platform uses %s (mandatory: %v)", Mechanism(), IsMandatory())
 }
+
+func TestAccessors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "accessors.lock")
+	// A zero mode must fall back to the default rather than creating a file
+	// nobody can open.
+	l := newLockAt(t, path, WithFileMode(0), WithDirMode(0))
+
+	if got := l.Path(); got != path {
+		t.Errorf("Path() = %q, want %q", got, path)
+	}
+	if l.Locked() {
+		t.Error("Locked() is true before anything was acquired")
+	}
+	if got := l.Mode(); got != Unlocked {
+		t.Errorf("Mode() = %s on a fresh lock, want %s", got, Unlocked)
+	}
+
+	if ok, err := l.TryRLock(); err != nil || !ok {
+		t.Fatalf("TryRLock: (%v, %v)", ok, err)
+	}
+	if !l.Locked() {
+		t.Error("Locked() is false while a shared lock is held")
+	}
+	if got := l.Mode(); got != Shared {
+		t.Errorf("Mode() = %s while holding shared, want %s", got, Shared)
+	}
+	if err := l.Unlock(); err != nil {
+		t.Fatalf("Unlock: %s", err)
+	}
+	if l.Locked() {
+		t.Error("Locked() is true after unlocking")
+	}
+}
+
+func TestModeStrings(t *testing.T) {
+	for mode, want := range map[Mode]string{
+		Unlocked: "unlocked", Shared: "shared", Exclusive: "exclusive", Mode(9): "Mode(9)",
+	} {
+		if got := mode.String(); got != want {
+			t.Errorf("Mode(%d).String() = %q, want %q", uint8(mode), got, want)
+		}
+	}
+}
+
+func TestZeroModesFallBackToDefaults(t *testing.T) {
+	if got := fileModeOrDefault(0, defaultFileMode); got != defaultFileMode {
+		t.Errorf("fileModeOrDefault(0) = %v, want the default %v", got, defaultFileMode)
+	}
+	if got := fileModeOrDefault(0o600, defaultFileMode); got != 0o600 {
+		t.Errorf("fileModeOrDefault(0o600) = %v, want it preserved", got)
+	}
+}
