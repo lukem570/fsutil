@@ -39,9 +39,9 @@ jobs:
           - windows-latest     # windows/amd64
           - windows-11-arm     # windows/arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
           check-latest: true
@@ -105,7 +105,7 @@ jobs:
     name: freebsd
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: vmactions/freebsd-vm@v1
         with:
           usesh: true
@@ -119,7 +119,7 @@ jobs:
     name: openbsd
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: vmactions/openbsd-vm@v1
         with:
           usesh: true
@@ -138,13 +138,19 @@ jobs:
     # otherwise green build. The result stays visible.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: vmactions/netbsd-vm@v1
         with:
           usesh: true
-          prepare: /usr/sbin/pkg_add go
+          # Installed from go.dev rather than from the image's package set.
+          # Both this image and the illumos one place Go somewhere the harness
+          # does not find, or do not carry it at all, and an official tarball
+          # is the same on every system.
+          prepare: |
+            ftp -o /tmp/go.tar.gz "https://go.dev/dl/go1.24.6.netbsd-amd64.tar.gz"
+            tar -C /usr/local -xzf /tmp/go.tar.gz
           run: |
-            PATH="/usr/pkg/bin:$PATH"; export PATH
+            PATH="/usr/local/go/bin:$PATH"; export PATH
             go version
             go test -count=1 ./...
             go test -count=1 -run TestConformance -v ./pkg/v1/notify/
@@ -159,13 +165,16 @@ jobs:
     # result stays visible.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Test in an OmniOS virtual machine
         uses: vmactions/omnios-vm@v1
         with:
           usesh: true
-          prepare: pkg install go-openssl3 || pkg install golang || true
+          prepare: |
+            curl -sSLo /tmp/go.tar.gz "https://go.dev/dl/go1.24.6.illumos-amd64.tar.gz"
+            gtar -C /usr/local -xzf /tmp/go.tar.gz || tar -C /usr/local -xzf /tmp/go.tar.gz
           run: |
+            PATH="/usr/local/go/bin:$PATH"; export PATH
             go version
             go test -count=1 ./...
 
@@ -176,8 +185,8 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
       - name: Build for android/arm64
@@ -194,11 +203,11 @@ jobs:
     name: cross-compile
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
-      - uses: arduino/setup-task@v2
+      - uses: arduino/setup-task@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - run: task crossbuild
@@ -216,13 +225,13 @@ jobs:
         # to cover the code that only exists for one.
         goos: [linux, darwin, windows, freebsd, openbsd, netbsd, illumos]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
       # The configuration uses the v2 schema, which only v8 of this action
       # installs a binary capable of reading.
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         env:
           GOOS: ${{ matrix.goos }}
         with:
@@ -232,11 +241,11 @@ jobs:
     name: format and tidy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
-      - uses: arduino/setup-task@v2
+      - uses: arduino/setup-task@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - run: go install mvdan.cc/gofumpt@latest
@@ -254,8 +263,8 @@ jobs:
       matrix:
         go: ['1.24', '1.25', '1.26']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go }}
       - run: go build ./...
