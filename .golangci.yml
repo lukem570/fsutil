@@ -50,6 +50,9 @@ linters:
       disabled-checks:
         - ifElseChain
         - hugeParam
+        # Naming return values purely to satisfy a check adds words without
+        # adding meaning when the types already say what they are.
+        - unnamedResult
 
   exclusions:
     rules:

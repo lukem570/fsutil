@@ -66,11 +66,27 @@ jobs:
       - name: Report which backends this host offers
         run: go test -run TestBackendsAvailable -v ./pkg/v1/notify/
 
+      # The race detector has no implementation for windows/arm64, so that one
+      # runner tests without it. It still proves the backend works on the
+      # architecture, which is why the job exists; race coverage comes from the
+      # other five.
       - name: Test
-        run: go test -race -count=1 ./...
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}-${{ runner.arch }}" = "Windows-ARM64" ]; then
+            go test -count=1 ./...
+          else
+            go test -race -count=1 ./...
+          fi
 
       - name: Conformance suite
-        run: go test -race -count=1 -run TestConformance -v ./pkg/v1/notify/
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}-${{ runner.arch }}" = "Windows-ARM64" ]; then
+            go test -count=1 -run TestConformance -v ./pkg/v1/notify/
+          else
+            go test -race -count=1 -run TestConformance -v ./pkg/v1/notify/
+          fi
 
   # The BSDs have no hosted runner, so each is booted in a virtual machine on a
   # Linux host. This is the only place kqueue runs on anything other than
