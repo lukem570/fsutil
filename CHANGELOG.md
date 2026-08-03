@@ -33,8 +33,9 @@ Pre-release. The API is settling but not yet frozen.
   repository need not spend kernel watches on its version-control directory.
 - `pkg/v1/notify`: a descriptor budget, so the number of watchable paths is not
   bounded by the process limit on open files and a watcher cannot starve the
-  program it belongs to. `Watcher.Stats()` makes any resulting loss of
-  precision observable.
+  program it belongs to. Files it cannot afford a descriptor for are compared
+  on an interval instead, so exhausting the budget costs latency rather than
+  silence, and `Watcher.Stats()` reports when that is happening.
 - `pkg/v1/notify`: kqueue backend for macOS and the BSDs. Per-file descriptors
   are opened only when a watch asks for `Write` or `Chmod`, so a watch
   interested only in creation and removal costs one descriptor per directory.
@@ -94,6 +95,7 @@ Pre-release. The API is settling but not yet frozen.
   written. CI on real machines exists to close that gap. Treat them as
   unverified until it has.
 - illumos and Solaris have no native backend and fall back to polling.
-- Where a backend runs out of descriptor budget, affected files keep their
-  creation, removal and rename events but lose modification events. See
-  `Watcher.Stats().DescriptorsDenied`.
+- Where a backend runs out of descriptor budget, affected files are compared on
+  an interval rather than watched, so modifications arrive up to one interval
+  late and one undone within an interval is not seen. Every operation is still
+  reported. See `Watcher.Stats().DescriptorsDenied`.
