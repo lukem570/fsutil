@@ -6,7 +6,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Pre-release. The API is settling but not yet frozen.
+## [0.1.0] - 2026-08-03
+
+First release. Every backend below passes the conformance suite on a real
+machine in CI — Linux (amd64 and arm64), macOS (Intel and Apple Silicon),
+Windows (amd64 and arm64), FreeBSD, OpenBSD, NetBSD and illumos.
+
+The version is deliberately not 1.0.0. In Go that is a permanent commitment to
+an API that no external program has yet exercised, and the options surface may
+still change as the remaining backends land. Nothing here is expected to break;
+the number says the promise has not been made rather than that the code is
+unfinished.
 
 ### Added
 
@@ -99,3 +109,6 @@ Pre-release. The API is settling but not yet frozen.
   an interval rather than watched, so modifications arrive up to one interval
   late and one undone within an interval is not seen. Every operation is still
   reported. See `Watcher.Stats().DescriptorsDenied`.
+
+[unreleased]: https://github.com/lukem570/fsutil/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/lukem570/fsutil/releases/tag/v0.1.0
