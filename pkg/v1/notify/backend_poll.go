@@ -377,7 +377,7 @@ func scan(root string, opts addOpts) (map[string]pollEntry, error) {
 		return out, nil
 	}
 	if opts.recursive {
-		return out, scanTree(root, out)
+		return out, scanTree(root, out, opts)
 	}
 
 	entries, err := os.ReadDir(root)
@@ -393,7 +393,11 @@ func scan(root string, opts addOpts) (map[string]pollEntry, error) {
 			}
 			return nil, err
 		}
-		out[filepath.Join(root, entry.Name())] = entryOf(info)
+		full := filepath.Join(root, entry.Name())
+		if opts.excluded(root, full) {
+			continue
+		}
+		out[full] = entryOf(info)
 	}
 	return out, nil
 }
@@ -405,7 +409,7 @@ func scan(root string, opts addOpts) (map[string]pollEntry, error) {
 // to follow symlinks but would still be vulnerable to a directory being
 // swapped for a symlink mid-walk; confinement removes that race rather than
 // narrowing it.
-func scanTree(root string, out map[string]pollEntry) error {
+func scanTree(root string, out map[string]pollEntry, opts addOpts) error {
 	dir, err := os.OpenRoot(root)
 	if err != nil {
 		return err
@@ -426,6 +430,16 @@ func scanTree(root string, out map[string]pollEntry) error {
 			return nil // the root is already recorded
 		}
 
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if opts.excluded(root, full) {
+			// Prune, so an excluded directory costs nothing to skip rather
+			// than being stat-ed on every tick.
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+
 		info, err := entry.Info()
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
@@ -433,7 +447,7 @@ func scanTree(root string, out map[string]pollEntry) error {
 			}
 			return err
 		}
-		out[filepath.Join(root, filepath.FromSlash(path))] = entryOf(info)
+		out[full] = entryOf(info)
 		return nil
 	})
 }

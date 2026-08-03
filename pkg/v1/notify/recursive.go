@@ -173,7 +173,7 @@ func (b *recursiveBackend) Add(path string, opts addOpts) error {
 		return nil
 	}
 
-	dirs, err := collectDirs(path)
+	dirs, err := collectDirs(path, opts)
 	if err != nil {
 		return err
 	}
@@ -276,6 +276,13 @@ func (b *recursiveBackend) onEvent(ev Event) bool {
 		return b.out.send(ev) // not part of a recursive watch
 	}
 
+	// A backend that watches subtrees natively, or one whose watch predates the
+	// exclusion, can still report an excluded path. Dropping it here means the
+	// option means the same thing whichever backend is underneath.
+	if root.opts.excluded(rootPath, ev.Name) {
+		return true
+	}
+
 	if ev.Has(Create) && b.consumeSynthesized(ev.Name) {
 		// Already reported when the containing directory was adopted.
 		debugf("dropping duplicate create for %s", ev.Name)
@@ -345,7 +352,7 @@ func (b *recursiveBackend) adopt(rootPath, dir string) []string {
 	opts := root.opts
 	b.mu.Unlock()
 
-	dirs, err := collectDirs(dir)
+	dirs, err := collectDirs(dir, opts)
 	if err != nil {
 		// The directory may have been removed again already, which is not
 		// worth reporting as a failure of the watch.
@@ -369,7 +376,7 @@ func (b *recursiveBackend) adopt(rootPath, dir string) []string {
 		b.mu.Unlock()
 	}
 
-	found := collectEntries(dir)
+	found := collectEntries(dir, opts)
 	if len(found) > 0 {
 		b.markSynthesized(found)
 	}
@@ -460,7 +467,7 @@ func (b *recursiveBackend) consumeSynthesized(path string) bool {
 // it outside. A recursive watch that followed symlinks would place watches on
 // arbitrary parts of the filesystem, which is both surprising and an easy way
 // to exhaust the kernel's watch limit.
-func collectDirs(path string) (dirs []string, err error) {
+func collectDirs(path string, opts addOpts) (dirs []string, err error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
@@ -488,7 +495,13 @@ func collectDirs(path string) (dirs []string, err error) {
 		if p == "." || !entry.IsDir() {
 			return nil
 		}
-		dirs = append(dirs, filepath.Join(path, filepath.FromSlash(p)))
+		full := filepath.Join(path, filepath.FromSlash(p))
+		if opts.excluded(path, full) {
+			// Prune rather than merely skip: an excluded directory's contents
+			// are excluded with it, which is the whole reason to exclude it.
+			return fs.SkipDir
+		}
+		dirs = append(dirs, full)
 		return nil
 	})
 	if err != nil {
@@ -498,7 +511,7 @@ func collectDirs(path string) (dirs []string, err error) {
 }
 
 // collectEntries returns every path beneath dir, excluding dir itself.
-func collectEntries(dir string) []string {
+func collectEntries(dir string, opts addOpts) []string {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return nil
@@ -506,7 +519,7 @@ func collectEntries(dir string) []string {
 	defer func() { _ = root.Close() }()
 
 	var out []string
-	_ = fs.WalkDir(root.FS(), ".", func(p string, _ fs.DirEntry, err error) error {
+	_ = fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) {
 				return nil
@@ -516,7 +529,14 @@ func collectEntries(dir string) []string {
 		if p == "." {
 			return nil
 		}
-		out = append(out, filepath.Join(dir, filepath.FromSlash(p)))
+		full := filepath.Join(dir, filepath.FromSlash(p))
+		if opts.excluded(dir, full) {
+			if d != nil && d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		out = append(out, full)
 		return nil
 	})
 	sort.Strings(out)

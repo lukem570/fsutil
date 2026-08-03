@@ -3,6 +3,7 @@ package notify
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -387,4 +388,119 @@ func TestOverlappingRootsReleaseEverythingEventually(t *testing.T) {
 			t.Errorf("%d reference counts left behind, want 0", refs)
 		}
 	})
+}
+
+// TestExcludeSkipsDirectories covers the case the option exists for: watching
+// a repository without drowning in the churn of the tool tracking it.
+func TestExcludeSkipsDirectories(t *testing.T) {
+	eachRecursiveBackend(t, func(t *testing.T, kind Backend) {
+		repo := t.TempDir()
+		for _, dir := range []string{".git", filepath.Join(".git", "objects"), "src"} {
+			if err := os.MkdirAll(filepath.Join(repo, dir), 0o755); err != nil {
+				t.Fatalf("MkdirAll: %s", err)
+			}
+		}
+
+		w, c := newTestWatcherOn(t, kind)
+		if err := w.AddWith(repo, WithRecursive(), WithExclude(".git")); err != nil {
+			t.Fatalf("AddWith: %s", err)
+		}
+
+		// A change inside the excluded tree must not be reported, however deep.
+		buried := filepath.Join(repo, ".git", "objects", "deadbeef")
+		writeFile(t, buried, "content")
+
+		// A change outside it must still be, which is what distinguishes an
+		// exclusion from a broken watch.
+		wanted := filepath.Join(repo, "src", "main.go")
+		writeFile(t, wanted, "package main")
+		c.await(t, "a create outside the excluded directory", func(evs []Event) bool {
+			return hasEvent(evs, wanted, Create)
+		})
+
+		if evs := c.snapshot(); hasEvent(evs, buried, Create) {
+			t.Errorf("reported a change inside an excluded directory:\n%s", formatEvents(evs))
+		}
+
+		// Nothing under the exclusion should be watched at all, which is the
+		// point: skipping the events but keeping the watches would still spend
+		// the kernel resources this exists to save.
+		if rb, wrapped := w.state.backend.(*recursiveBackend); wrapped {
+			for _, watched := range rb.inner.WatchList() {
+				if strings.Contains(watched, string(filepath.Separator)+".git") {
+					t.Errorf("placed a watch inside an excluded directory: %s", watched)
+				}
+			}
+		}
+	})
+}
+
+// TestExcludeAppliesToDirectoriesCreatedLater checks that an exclusion holds
+// for directories that appear after the watch, not merely those present when
+// it was established.
+func TestExcludeAppliesToDirectoriesCreatedLater(t *testing.T) {
+	eachRecursiveBackend(t, func(t *testing.T, kind Backend) {
+		dir := t.TempDir()
+		w, c := newTestWatcherOn(t, kind)
+		if err := w.AddWith(dir, WithRecursive(), WithExclude("node_modules")); err != nil {
+			t.Fatalf("AddWith: %s", err)
+		}
+
+		if err := os.MkdirAll(filepath.Join(dir, "node_modules", "pkg"), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %s", err)
+		}
+		buried := filepath.Join(dir, "node_modules", "pkg", "index.js")
+		writeFile(t, buried, "content")
+
+		wanted := filepath.Join(dir, "app.js")
+		writeFile(t, wanted, "content")
+		c.await(t, "a create outside the excluded directory", func(evs []Event) bool {
+			return hasEvent(evs, wanted, Create)
+		})
+
+		if evs := c.snapshot(); hasEvent(evs, buried, Create) {
+			t.Errorf("reported a change in a directory excluded after the watch began:\n%s",
+				formatEvents(evs))
+		}
+	})
+}
+
+func TestExcludeMatchesGlobsAndRelativePaths(t *testing.T) {
+	eachRecursiveBackend(t, func(t *testing.T, kind Backend) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "build", "cache"), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %s", err)
+		}
+
+		w, c := newTestWatcherOn(t, kind)
+		if err := w.AddWith(dir, WithRecursive(), WithExclude("*.tmp", "build/cache")); err != nil {
+			t.Fatalf("AddWith: %s", err)
+		}
+
+		writeFile(t, filepath.Join(dir, "scratch.tmp"), "x")
+		writeFile(t, filepath.Join(dir, "build", "cache", "blob"), "x")
+
+		wanted := filepath.Join(dir, "build", "output.bin")
+		writeFile(t, wanted, "x")
+		c.await(t, "a create in a directory that was not excluded", func(evs []Event) bool {
+			return hasEvent(evs, wanted, Create)
+		})
+
+		evs := c.snapshot()
+		if hasEvent(evs, filepath.Join(dir, "scratch.tmp"), Create) {
+			t.Error("a glob exclusion did not suppress a matching file")
+		}
+		if hasEvent(evs, filepath.Join(dir, "build", "cache", "blob"), Create) {
+			t.Error("a relative-path exclusion did not suppress its directory")
+		}
+	})
+}
+
+func TestExcludeRejectsAMalformedPattern(t *testing.T) {
+	w, _ := newTestWatcher(t)
+	// A pattern that cannot match anything must be reported when it is given,
+	// not silently treated as matching nothing.
+	if err := w.AddWith(t.TempDir(), WithRecursive(), WithExclude("[")); err == nil {
+		t.Error("AddWith accepted a malformed exclude pattern")
+	}
 }

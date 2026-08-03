@@ -77,6 +77,25 @@ never delivered by default, and asking for one on a backend that cannot produce
 it fails with `ErrUnsupported` — rather than silently never firing, which is
 the worst possible outcome because it looks like nothing happened.
 
+### Skipping directories
+
+```go
+w.AddWith(repo, notify.WithRecursive(),
+    notify.WithExclude(".git", "node_modules", "*.tmp"))
+```
+
+An excluded directory is pruned rather than filtered: no watch is placed on it
+and nothing beneath it is walked. That matters because watching a repository
+without skipping its version-control directory spends kernel watches on
+thousands of files nobody wants events for, and buries the changes that do
+matter under churn from the tool tracking them.
+
+Patterns use `path.Match` syntax and are tested against both a path's final
+element and its path relative to the watch root, so `node_modules` excludes
+that directory wherever it appears while `build/cache` excludes only that one.
+Exclusions apply to directories created after the watch begins, not only those
+present when it started.
+
 ### Choosing a backend
 
 A backend is selected automatically: the best mechanism the host provides,
@@ -124,15 +143,15 @@ interval of latency.
 | `poll` | everywhere | periodic rescan | verified |
 | `inotify` | Linux | `inotify_init1` | verified |
 | `fanotify` | Linux 5.9+ | `fanotify_mark`, needs `CAP_SYS_ADMIN` | verified |
-| `kqueue` | macOS, FreeBSD, OpenBSD, NetBSD, DragonFly | `EVFILT_VNODE` | awaiting CI |
-| `directory-changes` | Windows | `ReadDirectoryChangesW` | awaiting CI |
+| `kqueue` | macOS, FreeBSD, OpenBSD, NetBSD, DragonFly | `EVFILT_VNODE` | verified |
+| `directory-changes` | Windows | `ReadDirectoryChangesW` | verified |
 | `usn-journal` | Windows | NTFS change journal | planned |
 | `fen` | illumos, Solaris | `port_create` | planned |
 
-"Verified" means the backend passes the conformance suite on a real machine.
-"Awaiting CI" means it compiles and vets for every target it claims but has not
-yet executed — there was no host to run it on while it was written. Treat those
-two as different until CI says otherwise.
+"Verified" means the backend passes the conformance suite on a real machine in
+CI, not merely that it compiles: every one above runs on Linux (amd64 and
+arm64), macOS (Intel and Apple Silicon), Windows (amd64 and arm64), FreeBSD and
+OpenBSD. DragonFly and NetBSD are covered by cross-compilation only.
 
 `fanotify` is never selected automatically, because a backend that works only
 when a process happens to be privileged is not something to depend on silently.
@@ -188,6 +207,7 @@ go build -o bin/fsutil ./cmd/fsutil
 
 bin/fsutil backends                    # what this host offers
 bin/fsutil watch -recursive ./dir      # print events as they happen
+bin/fsutil watch -recursive -exclude .git,node_modules ./repo
 bin/fsutil lock /tmp/x.lock -- make    # run a command holding a lock
 ```
 

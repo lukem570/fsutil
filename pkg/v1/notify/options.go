@@ -2,6 +2,7 @@ package notify
 
 import (
 	"fmt"
+	path2 "path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -100,6 +101,7 @@ type addOpts struct {
 	bufferSize int
 	noFollow   bool
 	recursive  bool
+	exclude    []string
 }
 
 func defaultAddOpts() addOpts {
@@ -178,6 +180,56 @@ func WithRecursive() AddOption {
 	return addOptFunc(func(o *addOpts) { o.recursive = true })
 }
 
+// WithExclude skips paths matching any of the given patterns.
+//
+// Patterns use [path.Match] syntax and are tested against two things: each
+// path's final element, and its path relative to the watch root, written with
+// forward slashes on every platform. So "node_modules" excludes that directory
+// wherever it appears, while "build/cache" excludes only that one place.
+//
+// Excluding a directory prunes it entirely. Nothing beneath it is watched, and
+// no watch is placed on it, which is the point: watching a repository without
+// skipping its version-control directory spends kernel watches on thousands of
+// files nobody wants events for, and buries the changes that matter under
+// churn from the tool tracking them.
+//
+//	w.AddWith(repo, notify.WithRecursive(),
+//		notify.WithExclude(".git", "node_modules", "*.tmp"))
+//
+// Exclusions apply to recursive watches, where they decide what is walked, and
+// to events, so a backend that reports a path anyway does not deliver it.
+// Adding an excluded path directly is still honoured — the option describes
+// what to skip while descending, not what may be watched.
+func WithExclude(patterns ...string) AddOption {
+	return addOptFunc(func(o *addOpts) { o.exclude = append(o.exclude, patterns...) })
+}
+
+// excluded reports whether path, which lies under root, matches any exclusion.
+func (o *addOpts) excluded(root, path string) bool {
+	if len(o.exclude) == 0 {
+		return false
+	}
+
+	base := filepath.Base(path)
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		rel = ""
+	}
+	rel = filepath.ToSlash(rel)
+
+	for _, pattern := range o.exclude {
+		if ok, err := path2.Match(pattern, base); err == nil && ok {
+			return true
+		}
+		if rel != "" && rel != "." {
+			if ok, err := path2.Match(pattern, rel); err == nil && ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // validate reports whether the assembled watch options are usable, given what
 // the backend can actually do.
 func (o *addOpts) validate(caps Capability) error {
@@ -192,6 +244,14 @@ func (o *addOpts) validate(caps Capability) error {
 	}
 	if want := o.ops & unportableOps; want != 0 && !caps.Has(CapUnportableOps) {
 		return fmt.Errorf("notify: %w: this backend cannot report %s", ErrUnsupported, want)
+	}
+	for _, pattern := range o.exclude {
+		// Report a malformed pattern when it is given rather than letting it
+		// silently match nothing, which would look like the exclusion working
+		// until someone noticed the events it should have suppressed.
+		if _, err := path2.Match(pattern, "probe"); err != nil {
+			return fmt.Errorf("notify: invalid exclude pattern %q: %w", pattern, err)
+		}
 	}
 	if o.noFollow && !caps.Has(CapNoFollow) {
 		return fmt.Errorf("notify: %w: this backend cannot watch symlinks without following them", ErrUnsupported)

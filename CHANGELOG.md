@@ -28,6 +28,9 @@ Pre-release. The API is settling but not yet frozen.
   `open_by_handle_at`, which avoids needing a second capability.
 - `pkg/v1/notify`: Windows backend using ReadDirectoryChangesW, with native
   subtree watching, so a recursive watch costs one handle for a whole tree.
+- `pkg/v1/notify`: `WithExclude`, which prunes matching directories from a
+  recursive watch entirely rather than filtering their events, so watching a
+  repository need not spend kernel watches on its version-control directory.
 - `pkg/v1/notify`: a descriptor budget, so the number of watchable paths is not
   bounded by the process limit on open files and a watcher cannot starve the
   program it belongs to. `Watcher.Stats()` makes any resulting loss of

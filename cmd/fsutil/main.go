@@ -134,6 +134,7 @@ func watchCmd(ctx context.Context, args []string) error {
 	interval := fs.Duration("interval", 0, "poll interval, for the polling backend")
 	opsFlag := fs.String("ops", "", "comma-separated operations to report (create,write,remove,rename,chmod)")
 	noFollow := fs.Bool("nofollow", false, "watch a symlink itself rather than its target")
+	exclude := fs.String("exclude", "", "comma-separated patterns to skip, e.g. .git,node_modules,*.tmp")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -159,7 +160,7 @@ func watchCmd(ctx context.Context, args []string) error {
 	}
 	defer func() { _ = w.Close() }()
 
-	addOpts, err := buildAddOptions(*recursive, *noFollow, *opsFlag)
+	addOpts, err := buildAddOptions(*recursive, *noFollow, *opsFlag, *exclude)
 	if err != nil {
 		return err
 	}
@@ -195,13 +196,16 @@ func watchCmd(ctx context.Context, args []string) error {
 // Assembling a list like this is exactly why AddOption is a named, exported
 // type: without one, every caller whose options depend on configuration would
 // be forced into a combinatorial switch.
-func buildAddOptions(recursive, noFollow bool, ops string) ([]notify.AddOption, error) {
+func buildAddOptions(recursive, noFollow bool, ops, exclude string) ([]notify.AddOption, error) {
 	var opts []notify.AddOption
 	if recursive {
 		opts = append(opts, notify.WithRecursive())
 	}
 	if noFollow {
 		opts = append(opts, notify.WithNoFollow())
+	}
+	if exclude != "" {
+		opts = append(opts, notify.WithExclude(strings.Split(exclude, ",")...))
 	}
 	if ops != "" {
 		parsed, err := parseOps(ops)
