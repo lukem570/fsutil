@@ -150,10 +150,11 @@ not something to attempt.
 | `kqueue` | macOS, FreeBSD, OpenBSD, NetBSD, DragonFly | `EVFILT_VNODE` | verified |
 | `directory-changes` | Windows | `ReadDirectoryChangesW` | verified |
 | `usn-journal` | Windows | NTFS change journal | planned |
-| `fen` | illumos, Solaris | `port_create` | planned |
+| `fen` | illumos, Solaris | `port_create` | awaiting CI |
 
 "Verified" means the backend passes the conformance suite on a real machine in
-CI, not merely that it compiles. Every one above runs on Linux (amd64 and
+CI, not merely that it compiles. "Awaiting CI" means it compiles and vets but
+has not yet run. Every one above runs on Linux (amd64 and
 arm64), macOS (Intel and Apple Silicon), Windows (amd64 and arm64), FreeBSD,
 OpenBSD and NetBSD. DragonFly is covered by cross-compilation only.
 
