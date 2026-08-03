@@ -212,9 +212,10 @@ func reportStats(w *notify.Watcher) {
 	fmt.Fprintf(os.Stderr, "stats: %s\n", s)
 	if s.DescriptorsDenied > 0 {
 		fmt.Fprintf(os.Stderr,
-			"  note: the descriptor budget was reached %d time(s), so modifications to some\n"+
-				"  files are no longer reported. Creation, removal and renaming still are.\n"+
-				"  Raise the process limit on open files, or watch fewer paths.\n",
+			"  note: the descriptor budget was reached %d time(s), so some files are being\n"+
+				"  compared on an interval rather than watched. Every operation is still\n"+
+				"  reported, but modifications arrive up to one interval late. Raise the\n"+
+				"  process limit on open files, or watch fewer paths.\n",
 			s.DescriptorsDenied)
 	}
 }

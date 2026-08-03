@@ -110,6 +110,10 @@ type kqueueBackend struct {
 	// on a large tree cannot starve the program it belongs to.
 	budget *fdBudget
 
+	// degraded compares the files the budget refused a descriptor, so that
+	// running out costs precision and latency rather than silence.
+	degraded *degradedPoller
+
 	mu     sync.Mutex
 	byFD   map[int]*kqWatch
 	byPath map[string]*kqWatch
@@ -134,11 +138,12 @@ func newKqueueBackend(s sink, cfg config) (backend, error) {
 	}
 
 	b := &kqueueBackend{
-		sink:   s,
-		kq:     kq,
-		budget: newFDBudget(cfg.fdBudget),
-		byFD:   make(map[int]*kqWatch),
-		byPath: make(map[string]*kqWatch),
+		sink:     s,
+		kq:       kq,
+		budget:   newFDBudget(cfg.fdBudget),
+		degraded: newDegradedPoller(s, cfg.pollInterval),
+		byFD:     make(map[int]*kqWatch),
+		byPath:   make(map[string]*kqWatch),
 	}
 
 	if err := newWakePipe(&b.wake); err != nil {
@@ -386,6 +391,8 @@ func (b *kqueueBackend) Close() error {
 		if _, err := unix.Write(b.wake[1], []byte{0}); err != nil && !errors.Is(err, unix.EAGAIN) {
 			b.closeErr = fmt.Errorf("signalling shutdown: %w", err)
 		}
+
+		b.degraded.close()
 
 		b.wg.Wait()
 
@@ -670,12 +677,22 @@ func (b *kqueueBackend) syncChildWatchesLocked(w *kqWatch, current map[string]fi
 			continue
 		}
 		if _, err := b.watchLocked(path, false, false, w.opts); err != nil {
+			// Running out of budget is not a failure to watch, it is a
+			// decision to watch differently: the file is compared on an
+			// interval instead, so modifications are reported late rather than
+			// not at all.
+			if errors.Is(err, errFDBudgetExhausted) {
+				b.degraded.add(path, w.opts.ops)
+				continue
+			}
 			// A dangling symlink cannot be opened, and a file may be
 			// unreadable. Neither is a reason to stop watching the rest of the
 			// directory, which is what failing here would amount to.
 			debugf("not watching %s: %s", path, err)
 			continue
 		}
+		// A file that now has a descriptor no longer needs comparing.
+		b.degraded.remove(path)
 	}
 
 	for _, child := range b.childrenLocked(w.path) {

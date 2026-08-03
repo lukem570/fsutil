@@ -102,14 +102,18 @@ releases it.
 ## Descriptor budget
 
 On backends that spend a descriptor per watched file, the budget stops watching
-consuming every descriptor in the process. When it is exhausted, affected files
-keep their `Create`, `Remove`, and `Rename` events — those are visible from the
-directory — but **lose `Write` and `Chmod`**.
+consuming every descriptor in the process. Files that cannot be given one are
+compared on an interval instead, so every operation is still reported — but
+modifications arrive **up to one interval late** rather than immediately, and a
+modification that is undone within one interval is not seen at all.
 
-This is silent by nature, which is why `Watcher.Stats().DescriptorsDenied`
-exists. A non-zero value means some files are being reported less precisely
-than the API suggests. Closing that gap by polling the affected files is
-planned but not implemented.
+Creation, removal and renaming are unaffected: those come from the directory,
+which always has a descriptor.
+
+`Watcher.Stats().DescriptorsDenied` reports how often the budget was reached.
+A non-zero value means some files are being observed by comparison rather than
+by notification, which is a difference in latency and in what a rapid
+change-and-revert looks like, not in which operations are reported.
 
 ## Locking
 

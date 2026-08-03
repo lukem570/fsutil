@@ -14,11 +14,11 @@ import (
 // cannot open the files the watcher is telling it about.
 //
 // The budget below bounds what watching may consume, leaving the rest for the
-// program. When it is exhausted, a backend does not fail: it gives up
-// precision it can afford to lose — per-file descriptors, and with them
-// per-file modification events — while continuing to report everything a
-// directory's own descriptor can reveal. What it must never do is return
-// EMFILE to a caller who asked to watch a path.
+// program. When it is exhausted, a backend does not fail and does not go
+// quiet: the files it could not afford a descriptor for are compared on an
+// interval instead, so every operation is still reported, with modifications
+// arriving late rather than not at all. What it must never do is return EMFILE
+// to a caller who asked to watch a path.
 
 // fdReserve is the number of descriptors kept away from watching no matter
 // how generous the limit is.
@@ -133,8 +133,10 @@ type Stats struct {
 
 	// DescriptorsDenied counts how many times the budget refused a
 	// descriptor. A non-zero value means some watched files are being
-	// reported less precisely than they would be with a higher limit — see
-	// [WithFDBudget] — and is the signal to raise the process limit.
+	// observed by periodic comparison rather than by kernel notification:
+	// every operation is still reported, but modifications arrive up to one
+	// poll interval late, and one undone within an interval is not seen. It
+	// is the signal to raise the process limit — see [WithFDBudget].
 	DescriptorsDenied int
 
 	// ProcessFDLimit is the process's own limit on open files, as discovered
@@ -160,8 +162,9 @@ type budgeter interface {
 //
 // The field worth watching is DescriptorsDenied. On platforms where watching
 // costs a descriptor per file, a non-zero value means the watcher has run out
-// of budget and is reporting some files less precisely — it still sees them
-// appear and disappear, but no longer sees them modified.
+// of budget and is observing some files by comparison rather than by
+// notification — every operation is still reported, but modifications arrive
+// up to one poll interval late.
 func (w *Watcher) Stats() Stats {
 	defer runtime.KeepAlive(w)
 
