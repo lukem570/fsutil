@@ -149,9 +149,9 @@ interval of latency.
 | `fen` | illumos, Solaris | `port_create` | planned |
 
 "Verified" means the backend passes the conformance suite on a real machine in
-CI, not merely that it compiles: every one above runs on Linux (amd64 and
-arm64), macOS (Intel and Apple Silicon), Windows (amd64 and arm64), FreeBSD and
-OpenBSD. DragonFly and NetBSD are covered by cross-compilation only.
+CI, not merely that it compiles. Every one above runs on Linux (amd64 and
+arm64), macOS (Intel and Apple Silicon), Windows (amd64 and arm64), FreeBSD,
+OpenBSD and NetBSD. DragonFly is covered by cross-compilation only.
 
 `fanotify` is never selected automatically, because a backend that works only
 when a process happens to be privileged is not something to depend on silently.
