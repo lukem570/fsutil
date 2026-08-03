@@ -287,10 +287,15 @@ func (o *addOpts) validate(caps Capability) error {
 // splitRecursive strips a trailing "/..." from path and reports whether it was
 // present. The returned path is cleaned.
 //
-// A bare "..." means the current directory, recursively. Note that this is
-// unambiguous: a real directory entry can never be named "..." because the
-// component is stripped by [filepath.Clean] only in this position, and no
-// filesystem allows a component consisting solely of dots beyond "." and "..".
+// A bare "..." means the current directory, recursively.
+//
+// Exactly one marker is consumed, and what remains is taken literally. Since
+// "..." is a legal filename on every filesystem this runs on, the notation
+// cannot tell a marker from a directory genuinely named that: "a/.../..."
+// means the directory "a/..." watched recursively. Stripping repeatedly would
+// resolve the ambiguity by silently widening the watch, which is the wrong way
+// to resolve it. Callers who may hold such a path should use
+// [WithRecursive] and pass the path unaltered.
 func splitRecursive(path string) (string, bool) {
 	if path == recursiveSuffix {
 		return ".", true
