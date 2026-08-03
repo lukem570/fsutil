@@ -176,12 +176,18 @@ jobs:
           # usage error rather than an extraction. Changing directory first is
           # what that tar expects.
           prepare: |
-            mkdir -p /usr/local
+            set -x
             curl -sSLo /tmp/go.tar.gz "https://dl.google.com/go/go1.24.6.illumos-amd64.tar.gz"
-            cd /usr/local && gzip -dc /tmp/go.tar.gz | tar xf -
+            ls -l /tmp/go.tar.gz
+            mkdir -p /opt
+            cd /opt && gzip -dc /tmp/go.tar.gz | tar xf -
+            ls -l /opt/go/bin/go
+            /opt/go/bin/go version
           run: |
-            PATH="/usr/local/go/bin:$PATH"; export PATH
+            set -x
+            PATH="/opt/go/bin:$PATH"; export PATH
             go version
+            go env GOOS GOARCH
             go test -count=1 ./...
 
   # Android is listed as supported but has no hosted runner and no VM image, so
