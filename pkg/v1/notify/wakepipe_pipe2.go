@@ -1,4 +1,4 @@
-//go:build linux || dragonfly || freebsd || netbsd || openbsd || illumos || solaris
+//go:build linux || dragonfly || freebsd || netbsd || openbsd
 
 package notify
 
@@ -16,6 +16,8 @@ import "golang.org/x/sys/unix"
 // Both ends are close-on-exec so that a forked child cannot hold the pipe open
 // and keep a reader alive, and non-blocking so that signalling shutdown cannot
 // itself block if the pipe is somehow full.
+// The build constraint lists exactly the platforms with a backend that needs
+// it; adding one elsewhere before its backend exists leaves it unreferenced.
 func newWakePipe(p *[2]int) error {
 	return unix.Pipe2(p[:], unix.O_CLOEXEC|unix.O_NONBLOCK)
 }

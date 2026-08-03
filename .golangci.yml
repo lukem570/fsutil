@@ -60,7 +60,7 @@ linters:
       # Integer widths in stat structures vary by architecture, so a conversion
       # that is redundant on one is required on another. Linting a single
       # platform cannot tell the difference.
-      - path: 'pkg/v1/(notify|lock)/.*_(linux|windows|darwin|bsd|unix|illumos|flock|aix|other|pipe2)\.go'
+      - path: 'pkg/v1/(notify|lock)/(backend_|sys_|key_|fileid_|fdlimit_|wakepipe_|kqueue_).*\.go'
         linters:
           - gocritic
           - unconvert
