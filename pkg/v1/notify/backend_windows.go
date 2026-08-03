@@ -59,9 +59,19 @@ const (
 )
 
 func init() {
-	// Recursion is native here, so the wrapper is not applied: a subtree costs
-	// one handle rather than one per directory.
-	factoryCaps[BackendDirectoryChanges] = CapRecursive | CapPreciseRename
+	// CapRecursive is deliberately not claimed, even though ReadDirectoryChangesW
+	// watches subtrees natively and doing so would cost one handle for a whole
+	// tree instead of one per directory.
+	//
+	// Native subtree watching has the same blind spot as every other interface:
+	// a populated directory renamed into the tree is reported as one directory
+	// appearing, with nothing said about its contents, which existed before the
+	// watch could cover them. It also double-reports a file covered by two
+	// overlapping subtree watches, since each handle notices it independently.
+	// The shared recursive wrapper already solves both, and is tested. Claiming
+	// native recursion to save handles would trade a correctness property for a
+	// resource one.
+	factoryCaps[BackendDirectoryChanges] = CapPreciseRename
 
 	register(backendFactory{
 		kind:     BackendDirectoryChanges,
@@ -331,6 +341,23 @@ func (b *windowsBackend) read() {
 			// The operation was cancelled because the watch is going away;
 			// that is not a failure worth reporting.
 			if errors.Is(err, windows.ERROR_OPERATION_ABORTED) {
+				continue
+			}
+			// A watched directory that has been deleted or renamed away leaves
+			// its handle referring to something no longer reachable by name.
+			// The kernel reports that as an access failure rather than as an
+			// event, so the watch's own disappearance has to be recognised
+			// here or it would never be reported at all.
+			if errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, windows.ERROR_INVALID_HANDLE) {
+				b.mu.Lock()
+				live := b.watches[w.id] == w
+				if live {
+					b.retireLocked(w)
+				}
+				b.mu.Unlock()
+				if live && w.opts.ops.Has(Remove) && !b.sink.send(Event{Name: w.path, Op: Remove}) {
+					return
+				}
 				continue
 			}
 			if !b.sink.fail(fmt.Errorf("notify: watching %s: %w", w.path, err)) {
